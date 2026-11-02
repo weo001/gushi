@@ -89,7 +89,7 @@
     const d = M ? M.date.slice(5).replace('-', '/') : '';
     $('#top').innerHTML = (opts.back ? '<button class="back" onclick="history.length>1?history.back():location.hash=\'#home\'">‹</button>' : '')
       + (opts.title ? `<span class="brand">${esc(opts.title)}</span>` : '<span class="brand">股市<i>白話通</i></span>')
-      + (d ? `<span class="date">資料 ${d}</span>` : '')
+      + (d ? `<span class="date" id="dtag">資料 ${d}</span>` : '')
       + `<a class="tb-ic" href="#search" aria-label="查詢股票" style="margin-left:auto">🔍</a><a class="pts" href="#me" id="pts" style="margin-left:4px"><span class="coin">點</span><span class="num" data-v="${S.pts}">${S.pts}</span></a>`;
     // 頂部背景跟著大盤紅綠（勾選連動：狀態一變，整個畫面跟著變）
     if (M?.index?.[0]) document.body.dataset.mkt = M.index[0].chg > 0 ? 'up' : M.index[0].chg < 0 ? 'down' : 'flat';
@@ -151,7 +151,8 @@
   }
 
   // ───── 股票列表 ─────
-  const item = (s, i = 0) => `<a class="it" href="#s/${s.c}" style="--k:${Math.min(i, 14)}"><div class="nm"><b>${esc(s.n)}</b>${X.items[s.c] ? '<span class="badge-ai">解說</span>' : ''}<small>${s.c}・${esc(s.ind)}${s.m === 'O' ? '・上櫃' : ''}</small></div>
+  const mk = (s) => (s.m === 'O' ? 'otc_' : 'tse_') + s.c;
+  const item = (s, i = 0) => `<a class="it" href="#s/${s.c}" data-lc="${mk(s)}" data-lt="it" style="--k:${Math.min(i, 14)}"><div class="nm"><b>${esc(s.n)}</b>${X.items[s.c] ? '<span class="badge-ai">解說</span>' : ''}<small>${s.c}・${esc(s.ind)}${s.m === 'O' ? '・上櫃' : ''}</small></div>
     <div class="px num">${s.close}</div><div class="pc num ${cls(s.pct)}">${fp(s.pct)}</div></a>`;
   const listHtml = (arr) => (arr.length ? `<div class="list">${arr.map((s, i) => item(s, i)).join('')}</div>` : '<p class="empty">沒有資料</p>');
 
@@ -172,7 +173,8 @@
     // 吸附卡片：加權（含 3 個月走勢線）、櫃買、漲跌家數、三大法人。左右滑會吸附，滑到的那張重畫線
     const idxCard = (i, k) => {
       const hist = k === 0 && M.taiex?.length >= 5 ? M.taiex.map(([date, close, v]) => ({ date, close, Trading_Volume: v })) : null;
-      return `<div class="snap-c idx"><small class="mute">${i.name}${hist ? '・近 3 個月' : ''}</small><div class="v num ${cls(i.chg)}">${i.close.toLocaleString('en-US')}</div>
+      const lk = /櫃買/.test(i.name) ? 'otc_o00' : /加權/.test(i.name) ? 'tse_t00' : '';
+      return `<div class="snap-c idx"${lk ? ` data-lc="${lk}" data-lt="idx"` : ''}><small class="mute">${i.name}${hist ? '・近 3 個月' : ''}</small><div class="v num ${cls(i.chg)}">${i.close.toLocaleString('en-US')}</div>
         <div class="c num ${cls(i.chg)}">${arrow(i.chg)} ${Math.abs(i.chg)}（${fp(i.pct)}）</div>${hist ? chart(hist, { h: 70, hide: true }) : `<div class="idx-big ${cls(i.chg)}">${arrow(i.chg) || '–'}</div>`}</div>`;
     };
     const imax = Math.max(...['f', 't', 'd'].map((k) => Math.abs(M.inst[k] || 0))) || 1;
@@ -238,9 +240,11 @@
     const kv = (k, v, c = '') => `<div><small>${k}</small><b class="${c}">${v}</b></div>`;
     const on = S.watch.includes(code);
     $('#view').innerHTML = `
-      <div class="card hero">
+      <div class="card hero" data-lc="${mk(s)}" data-lt="hero">
         <div class="row"><div><div class="nm">${esc(s.n)}</div><small class="mute">${s.c}・${s.m === 'O' ? '上櫃' : '上市'}・${esc(s.ind)}</small></div><button class="star" id="star" title="加入自選">${on ? '⭐' : '☆'}</button></div>
         <div class="px num ${cls(s.pct)}">${s.close}</div><div class="ch num ${cls(s.pct)}">${arrow(s.chg)} ${Math.abs(s.chg)}（${fp(s.pct)}）</div>
+        <div class="live5" hidden></div>
+        <div class="kv-h small mute" hidden></div>
         <div class="kv">${kv('成交量', s.vol.toLocaleString('en-US') + ' 張')}${kv('成交值', s.val + ' 億')}${kv('量比', ex?.vr ? ex.vr + ' 倍' : '—')}
           ${kv('外資', fl(s.f), cls(s.f))}${kv('投信', fl(s.t), cls(s.t))}${kv('自營商', fl(s.d), cls(s.d))}</div>
         <p class="disc">法人買賣超單位：張。量比＝今天成交量 ÷ 前 20 天平均。</p>
@@ -266,7 +270,7 @@
   function drawExplain(s, fresh) {
     const el = $('#ex'); if (!el) return;
     const word = s.pct > 0 ? '漲' : s.pct < 0 ? '跌' : '沒動';
-    const head = `<h3>🤖 為什麼今天${word}？</h3>`;
+    const head = `<h3>🤖 為什麼${dayWord()}${word}？</h3>`;
     if (!Core.isUnlocked(S, s.c, 'explain', M.date)) {
       el.innerHTML = head + lockBox(s, 'explain', `${esc(s.n)}今天${word}的白話解說：和大盤、同產業比起來怎麼樣，成交量是不是異常，外資投信在買還是賣，還有今天的相關新聞…`);
       el.querySelector('[data-unlock]').onclick = (e) => tryUnlock(s.c, 'explain', (f) => drawExplain(s, f), e.currentTarget);
@@ -377,12 +381,13 @@
     if (isAll) items = items.slice(0, eq ? 300 : 400);
     if (eq) items = items.map((x) => ({ s: x.s, v: 1 }));
     const fScale = (() => { const a = items.map((x) => Math.abs(fv(x.s))).sort((p, q) => p - q); return a[Math.floor(a.length * 0.9)] || 1; })();
+    const liveTiles = !isAll && HM.color === 'pct' && items.length <= 150;
     const colorOf = (s) => (HM.color === 'f' ? Core.heatColor((fv(s) / fScale) * 6) : Core.heatColor(s.pct));
     const H = Math.round(W * (isAll ? 1.45 : items.length > 12 ? 1.1 : 0.85));
     const tile = (t, k) => {
       const s = t.s, area = Math.sqrt(t.w * t.h), fsz = Math.max(9, Math.min(22, area / 5.2));
-      const lab = t.w > 30 && t.h > 18 ? `<b style="font-size:${fsz}px">${esc(s.n)}</b>${t.h > fsz * 2.5 && t.w > 40 ? `<span style="font-size:${Math.max(9, fsz * 0.78)}px">${HM.color === 'f' ? fc(Math.round(fv(s) * 10) / 10) + '億' : fp(s.pct)}</span>` : ''}` : '';
-      return `<button class="tl" data-c="${s.c}" style="left:${t.x}px;top:${t.y}px;width:${t.w}px;height:${t.h}px;background:${colorOf(s)};--k:${Math.min(k, 60)}" title="${esc(s.n)} ${fp(s.pct)}">${lab}</button>`;
+      const lab = t.w > 30 && t.h > 18 ? `<b style="font-size:${fsz}px">${esc(s.n)}</b>${t.h > fsz * 2.5 && t.w > 40 ? `<span class="tp" style="font-size:${Math.max(9, fsz * 0.78)}px">${HM.color === 'f' ? fc(Math.round(fv(s) * 10) / 10) + '億' : fp(s.pct)}</span>` : ''}` : '';
+      return `<button class="tl" data-c="${s.c}"${liveTiles ? ` data-lc="${mk(s)}" data-lt="tl"` : ''} style="left:${t.x}px;top:${t.y}px;width:${t.w}px;height:${t.h}px;background:${colorOf(s)};--k:${Math.min(k, 60)}" title="${esc(s.n)} ${fp(s.pct)}">${lab}</button>`;
     };
     let html = '';
     if (isAll) {
@@ -413,7 +418,7 @@
         <span class="mute" style="margin-left:auto">${items.length} 檔・<span class="up">漲 ${ups}</span>・<span class="down">跌 ${dns}</span>・${HM.color === 'f' ? '' : (eq ? '平均 ' : '加權 ') + fp(wavg)}</span></div>
       ${items.length ? `<div class="hm" id="hm" style="height:${H}px">${html}</div>` : `<div class="card empty">${sc === 'watch' ? '自選股還是空的，先到個股頁按 ☆ 加進來。' : '這裡沒有資料'}</div>`}
       <div class="hm-legend"><span>${HM.color === 'f' ? '外資賣' : '-6%'}</span><i></i><span>${HM.color === 'f' ? '外資買' : '+6%'}</span></div>
-      <p class="disc">方塊大小＝${eq ? '每檔一樣大' : sizeKey === 'cap' ? '市值' : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}點方塊看重點。</p>
+      <p class="disc">方塊大小＝${eq ? '每檔一樣大' : sizeKey === 'cap' ? '市值' : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}${Live.enabled() ? (liveTiles ? '盤中每 5 秒更新漲跌（證交所報價）。' : isAll ? '全市場是收盤資料；自選、概念股、單一產業盤中會即時更新。' : '') : ''}點方塊看重點。</p>
       ${!isAll && items.length ? `<div class="card"><h3>漲跌排行</h3>${listHtml(items.map((x) => x.s).sort((a, b) => b.pct - a.pct))}</div>` : ''}`;
     if (hmTap) { FX.circle($('#hm'), hmTap.x, hmTap.y); hmTap = null; }
     const go = (scope, e) => { HM.scope = scope; hmSave(); if (e) hmTap = { x: e.clientX, y: e.clientY }; FX.haptic(5); V.heat(); window.scrollTo({ top: 0 }); };
@@ -563,6 +568,72 @@
     }
   };
 
+  // ───── 盤中即時報價（live.js）─────
+  // 只在 iPhone App（和本機測試）有；報價日期比收盤資料新才顯示，所以假日、收盤資料更新後自動回到收盤資料
+  const mdate = () => (M ? M.date.replace(/-/g, '') : '');
+  const dayWord = () => (M && Live.today() > mdate() ? ' ' + M.date.slice(5).replace('-', '/') + ' ' : '今天');
+  const fresh = (q) => q && q.price != null && q.d > mdate();
+  const px2 = (v) => (v == null ? '—' : v >= 1000 ? Math.round(v * 100) / 100 + '' : +v.toFixed(2) + '');
+  const setCls = (el, p) => { if (!el) return; el.classList.remove('up', 'down', 'flat'); el.classList.add(cls(p)); };
+  function paintLive() {
+    if (!M) return;
+    let any = null;
+    for (const el of document.querySelectorAll('[data-lc]')) {
+      const q = Live.get(el.dataset.lc); if (!fresh(q)) continue;
+      any = q;
+      const t = el.dataset.lt, chs = `${arrow(q.chg)} ${Math.abs(q.chg)}（${fp(q.pct)}）`;
+      if (t === 'it') {
+        const a = el.querySelector('.px'), b = el.querySelector('.pc');
+        if (a && a.textContent !== px2(q.price)) { a.textContent = px2(q.price); a.classList.remove('tick'); void a.offsetWidth; a.classList.add('tick'); }
+        if (b) { b.textContent = fp(q.pct); setCls(b, q.pct); }
+      } else if (t === 'idx') {
+        const v = el.querySelector('.v'), c = el.querySelector('.c');
+        if (v) { v.textContent = q.price.toLocaleString('en-US'); setCls(v, q.chg); }
+        if (c) { c.textContent = chs; setCls(c, q.chg); }
+      } else if (t === 'tl') {
+        el.style.background = Core.heatColor(q.pct);
+        const sp = el.querySelector('.tp'); if (sp) sp.textContent = fp(q.pct);
+      } else if (t === 'hero') {
+        const v = el.querySelector('.px'), c = el.querySelector('.ch');
+        if (v) { if (v.textContent !== px2(q.price)) { v.textContent = px2(q.price); v.classList.remove('tick'); void v.offsetWidth; v.classList.add('tick'); } setCls(v, q.pct); }
+        if (c) { c.textContent = chs; setCls(c, q.pct); }
+        const f5 = el.querySelector('.live5');
+        if (f5) {
+          f5.hidden = false;
+          const kv = (k, v) => `<div><small>${k}</small><b>${v}</b></div>`;
+          const rows = [0, 1, 2, 3, 4].map((i) => `<tr><td class="num">${q.bidV[i] ?? ''}</td><td class="num ${cls((q.bid[i] ?? q.prev) - q.prev)}">${q.bid[i] != null ? px2(q.bid[i]) : ''}</td><td class="num ${cls((q.ask[i] ?? q.prev) - q.prev)}">${q.ask[i] != null ? px2(q.ask[i]) : ''}</td><td class="num">${q.askV[i] ?? ''}</td></tr>`).join('');
+          f5.innerHTML = `<div class="kv">${kv('開盤', px2(q.open))}${kv('最高', px2(q.high))}${kv('最低', px2(q.low))}${kv('成交量', q.vol != null ? q.vol.toLocaleString('en-US') + ' 張' : '—')}${kv('漲停', px2(q.up))}${kv('跌停', px2(q.down))}</div>
+            ${q.bid.length || q.ask.length ? `<table class="ob"><tr><th>買量</th><th>買價</th><th>賣價</th><th>賣量</th></tr>${rows}</table>` : ''}`;
+          const h = el.querySelector('.kv-h'); if (h) { h.hidden = false; h.textContent = `下面是 ${M.date.slice(5).replace('-', '/')} 收盤後的資料（成交量、法人買賣超）`; }
+        }
+      }
+    }
+    const tag = $('#dtag');
+    if (tag && any) {
+      const open = Live.session() === 'open';
+      tag.innerHTML = open ? `<span class="live-dot"></span>即時 ${any.t.slice(0, 5)}` : `收盤 ${any.d.slice(4, 6)}/${any.d.slice(6)}`;
+      tag.classList.toggle('on', open);
+    }
+  }
+  let liveTimer = 0, moT = 0;
+  const tried = new Set();
+  // 畫面換了新的股票列表（切分頁、熱力圖換範圍）→ 馬上補抓、補畫
+  new MutationObserver((ms) => {
+    if (!ms.some((m) => [...m.addedNodes].some((n) => n.nodeType === 1 && (n.matches('[data-lc]') || n.querySelector('[data-lc]'))))) return;
+    clearTimeout(moT); moT = setTimeout(() => { paintLive(); liveTick(); }, 120);
+  }).observe(document.getElementById('view'), { childList: true, subtree: true });
+  async function liveTick() {
+    clearTimeout(liveTimer);
+    if (Live.enabled() && M && !document.hidden && Live.session() !== 'closed') {
+      const keys = [...new Set([...document.querySelectorAll('[data-lc]')].map((e) => e.dataset.lc))].slice(0, 150);
+      const due = Date.now() - Live.last >= Live.interval() - 300 || keys.some((k) => !tried.has(k));
+      if (keys.length && due) { keys.forEach((k) => tried.add(k)); await Live.fetchKeys(keys); }
+      paintLive();
+    }
+    liveTimer = setTimeout(liveTick, Live.session() === 'open' ? 5000 : 30000);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) liveTick(); });
+
   // ───── 路由 ─────
   function route() {
     const h = decodeURIComponent(location.hash.slice(1)) || 'home';
@@ -574,6 +645,7 @@
     // 圓形擴散轉場：從底部選單按下的位置擴散開（只有點選單才有）
     if (navTap && Date.now() - navTap.t < 800) FX.circle($('#view'), navTap.x, navTap.y);
     navTap = null;
+    setTimeout(() => { paintLive(); liveTick(); }, 60);
   }
   let navTap = null;
   $('#nav').addEventListener('pointerdown', (e) => { navTap = { x: e.clientX, y: e.clientY, t: Date.now() }; FX.haptic(4); });

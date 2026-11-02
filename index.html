@@ -291,6 +291,19 @@ body{background:radial-gradient(90% 260px at 50% -40px,var(--glow),transparent 7
 .inter .rask{position:absolute;inset:auto 0 0;background:#121a2e;padding:20px;text-align:center;border-radius:20px 20px 0 0}
 .inter .rask .row{justify-content:center;margin-top:12px}
 .inter .btn.line{background:transparent;border:1px solid #3a4466}
+
+/* 盤中即時報價 */
+.top .date.on{color:#2fcf7f;font-weight:600}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2fcf7f;margin-right:4px;vertical-align:1px;animation:ldot 1.4s ease-in-out infinite}
+@keyframes ldot{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(47,207,127,.6)}50%{opacity:.6;box-shadow:0 0 0 5px rgba(47,207,127,0)}}
+.tick{animation:tick .9s ease-out}
+@keyframes tick{0%{background:rgba(255,200,91,.35)}100%{background:transparent}}
+.live5{margin-top:10px}
+.live5 .kv{margin-top:0}
+.ob{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
+.ob th{font-weight:400;color:var(--mute);font-size:11px;padding:2px 0}
+.ob td{text-align:center;padding:2px 0;border-top:1px solid var(--line)}
+.kv-h{margin-top:12px}
 </style>
 </head>
 <body>
@@ -314,6 +327,7 @@ body{background:radial-gradient(90% 260px at 50% -40px,var(--glow),transparent 7
 <script src="core.js"></script>
 <script src="fx.js"></script>
 <script src="ads.js"></script>
+<script src="live.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
