@@ -8,6 +8,7 @@
 // 用法：node pipeline/build.js [--date 2026-11-02] [--limit 70] [--no-ai]
 const fs = require('fs'), path = require('path');
 const Core = require('../core.js');
+const Reports = require('./reports.js');
 // 本機金鑰檔 pipeline/.env（不會上傳 GitHub）：一行一個 KEY=值
 try { for (const l of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z_]+)\s*=\s*(.+?)\s*$/); if (m && !process.env[m[1]]) process.env[m[1]] = m[2]; } } catch (e) {}
 
@@ -34,7 +35,9 @@ async function get(url, { tries = 3, json = true } = {}) {
     }
   }
 }
+let fmCalls = 0; // 這次用掉的 FinMind 次數（免費每小時 300 次，有 token 600 次）
 const fm = async (dataset, q) => {
+  fmCalls++;
   const u = new URL('https://api.finmindtrade.com/api/v4/data');
   u.searchParams.set('dataset', dataset);
   for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
@@ -129,16 +132,24 @@ async function shares() {
 
 // ── Groq AI ──
 let lastAi = 0;
-async function groq(prompt) {
-  for (let i = 0; i < 4; i++) {
+// 主模型每天 token 額度用完 → 換備用模型（各自有額度）
+const MODELS = [GROQ_MODEL, 'openai/gpt-oss-20b'];
+let mi = 0;
+async function groq(prompt, maxTokens = 700) {
+  for (let i = 0; i < 6; i++) {
+    const GROQ_MODEL = MODELS[mi]; if (!GROQ_MODEL) return null;
     const wait = 8000 - (Date.now() - lastAi); if (wait > 0) await sleep(wait); // 免費額度每分鐘 token 有限，慢慢送
     lastAi = Date.now();
-    const body = { model: GROQ_MODEL, temperature: 0.3, max_tokens: 700, messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }] };
+    const body = { model: GROQ_MODEL, temperature: 0.3, max_tokens: maxTokens, messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }] };
     if (/gpt-oss/.test(GROQ_MODEL)) body.reasoning_effort = 'low';
     const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + GROQ_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000),
     }).catch((e) => ({ ok: false, status: 0, text: async () => e.message }));
-    if (r.status === 429) { const s = +(r.headers.get('retry-after') || 20); log('  Groq 額度暫時用完，等', s, '秒'); await sleep(s * 1000 + 500); continue; }
+    if (r.status === 429) {
+      const s = +(r.headers.get('retry-after') || 20), txt = await r.text().catch(() => '');
+      if (s > 120 || /per day|TPD|RPD/i.test(txt)) { log('  Groq', GROQ_MODEL, '今天額度用完，換', MODELS[mi + 1] || '（沒有了，改規則版）'); mi++; continue; }
+      log('  Groq 額度暫時用完，等', s, '秒'); await sleep(s * 1000 + 500); continue;
+    }
     if (!r.ok) { log('  Groq 錯誤', r.status, (await r.text()).slice(0, 150)); return null; }
     const j = await r.json();
     return (j.choices?.[0]?.message?.content || '').replace(/\*\*/g, '').trim();
@@ -184,6 +195,7 @@ async function groq(prompt) {
 
   const items = {}; let aiN = 0, ruleN = 0;
   for (const [i, s] of pick.entries()) {
+    if (prev[s.c]?.ai) { items[s.c] = prev[s.c]; aiN++; continue; }
     try {
       const [hist, news] = await Promise.all([
         fm('TaiwanStockPrice', { data_id: s.c, start_date: addDays(date, -45), end_date: date }),
@@ -237,4 +249,14 @@ async function groq(prompt) {
   fs.writeFileSync(path.join(DATA, 'market.json'), JSON.stringify(market));
   fs.writeFileSync(path.join(DATA, 'explain.json'), JSON.stringify({ date, updated: market.updated, model: aiN ? GROQ_MODEL : 'rule', items }));
   log(`完成：${market.rows.length} 檔行情、${aiN} 篇 AI 解說、${ruleN} 篇規則版解說`);
+
+  // 5. 盤後 AI 報告：日報、概念股週報、個股報告書（FinMind 額度留 20 次緩衝）
+  if (!process.argv.includes('--no-reports')) {
+    const g = GROQ_KEY ? groq : null, explain = { items };
+    const budget = () => (FM_TOKEN ? 580 : 280) - fmCalls;
+    try { await Reports.daily({ date, market, stocks, explain, groq: g, log }); } catch (e) { log('日報失敗', e.message); }
+    try { await Reports.weekly({ date, all, explain, groq: g, log, fm, budget: budget() }); } catch (e) { log('週報失敗', e.message); }
+    try { await Reports.stockReports({ date, stocks, fm, groq: g, log, budget: +arg('report-budget', budget()) }); } catch (e) { log('報告書失敗', e.message); }
+    log('FinMind 共用了', fmCalls, '次');
+  }
 })().catch((e) => { console.error('失敗：', e.message); process.exit(1); });

@@ -13,7 +13,7 @@
     AD_REWARD: 3,         // 看完一支獎勵廣告給幾點
     AD_DAILY_MAX: 10,     // 每天最多看幾支獎勵廣告
     CHECKIN: 1,           // 每日簽到
-    COST: { explain: 1, deep: 3 }, // 白話解說 1 點、深度報告 3 點
+    COST: { explain: 1, deep: 3, weekly: 2 }, // 白話解說 1 點、個股報告書 3 點、概念股週報 2 點
     GAME_FREE: 5,         // 盲測每天免費幾局
     GAME_AD_BONUS: 5,     // 看一支廣告多幾局
     INTER_EVERY: 3,       // 每查 3 檔股票跳 1 次插頁廣告
@@ -21,7 +21,7 @@
     INTER_AFTER_REWARD_MS: 60000, // 剛看完獎勵廣告 1 分鐘內不跳插頁
     INTER_NEW_FREE: 3,    // 新使用者前 3 次查詢不跳
   };
-  C.KIND_NAME = { explain: '白話解說', deep: '深度報告' };
+  C.KIND_NAME = { explain: '白話解說', deep: '個股報告書', weekly: '概念股週報' };
 
   // 台灣時間的日期字串 YYYY-MM-DD
   C.today = (now = Date.now()) => new Date(now + 8 * 3600e3).toISOString().slice(0, 10);
@@ -225,13 +225,59 @@
     const kept = parts.filter((x) => !/看不出明確原因/.test(x));
     return kept.length && kept.join('').length >= 40 ? kept.join('').trim() : t;
   };
-  C.aiOk = (t) => {
+  C.aiOk = (t, max = 320, min = 20) => {
     if (typeof t !== 'string') return false;
     t = t.trim();
-    if (t.length < 20 || t.length > 320) return false;
+    if (t.length < min || t.length > max) return false;
     if (/(建議|可以考慮|適合)(買進|進場|布局|加碼|賣出|減碼)|目標價|逢低買|逢高賣/.test(t)) return false;
     const simp = (t.match(/[这们说为时会来对个发经过还进间们后]/g) || []).length;
     return simp <= 2;
+  };
+
+  // ───────────── 3b. 盤後 AI 報告（伺服器每天產生）─────────────
+  const RULES = '只能根據使用者提供的資料寫，資料裡沒有的事情不准猜、不准編造新聞或數字，數字照資料寫。不可以給任何買進、賣出、目標價、會漲會跌的預測或建議。用繁體中文（台灣用語），對象是投資新手，不要用條列、不要用 markdown。';
+  // 個股報告書的「AI 結論」：讀規則版分析的結果，寫成一段有重點的總結
+  C.reportPrompt = (name, code, R) => ({
+    system: '你是台股研究助理，幫新手把一份分析資料整理成「結論」。寫 3 到 5 句、220 字以內：先講整體資料偏多還是偏空（照資料的訊號數），再挑最重要的 2 到 3 個重點，最後講最需要注意的風險。' + RULES,
+    user: [`股票：${name}（${code}），資料日期 ${R.date}`, `整體：${R.summary}（偏多訊號 ${R.bull} 個、偏空訊號 ${R.bear} 個）`,
+      ...R.sections.map((x) => `【${x.title}】${x.lines.join(' ')}`), `【風險】${R.risks.join(' ')}`].join('\n'),
+  });
+  // 盤後日報：第一行「標題：…」，接著內文
+  C.dailyPrompt = (f) => ({
+    system: '你是台股盤後日報的編輯，幫新手寫今天台股發生了什麼事。第一行寫「標題：」加 18 字以內的標題，下一行開始寫內文 4 到 6 句、300 字以內，依序講大盤和漲跌家數、三大法人、強勢和弱勢族群、焦點個股和原因（原因只能用資料裡的個股解說和新聞）。' + RULES,
+    user: [`日期：${f.date}`, `加權指數 ${f.taiex}；櫃買指數 ${f.otc || '無資料'}`, `上漲 ${f.up} 家、下跌 ${f.down} 家、平盤 ${f.flat} 家`,
+      `三大法人買賣超（估算，億元）：外資 ${f.inst.f}、投信 ${f.inst.t}、自營商 ${f.inst.d}`, `強勢族群：${f.strong}`, `弱勢族群：${f.weak}`,
+      `成交值最大：${f.hot}`, `焦點個股解說：` + f.notes.map((x, i) => `\n${i + 1}. ${x}`).join(''), `新聞標題：` + f.news.map((x, i) => `\n${i + 1}. ${x}`).join('')].join('\n'),
+  });
+  C.parseDaily = (t) => {
+    if (typeof t !== 'string') return null;
+    const m = t.trim().match(/^標題[:：]\s*(.{4,30})\n+([\s\S]+)$/);
+    if (!m) return null;
+    const title = m[1].trim(), text = C.aiClean(m[2].trim());
+    return C.aiOk(text, 420, 80) && C.aiOk(title, 30, 4) ? { title, text } : null;
+  };
+  // 概念股週報：一個族群一段
+  C.groupPrompt = (g) => ({
+    system: '你是台股族群觀察員，用 2 到 3 句、140 字以內，說明這個概念股族群這一週的表現：整體漲跌、誰最強誰最弱、有資料的話說明原因。' + RULES,
+    user: [`族群：${g.name}`, `近 5 個交易日平均漲跌：${C.fmtPct(g.pct5)}（${g.from}～${g.to}）`,
+      `成員近 5 日漲跌：` + g.members.map((m) => `${m[1]}${C.fmtPct(m[2])}`).join('、'),
+      `本週相關個股解說：` + (g.notes.length ? g.notes.map((x, i) => `\n${i + 1}. ${x}`).join('') : '無')].join('\n'),
+  });
+  // ISO 週次，例如 2026-W45
+  C.weekKey = (date) => {
+    const d = new Date(Date.parse(date.slice(0, 10) + 'T00:00:00Z'));
+    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7)); // 移到同一週的星期四
+    const y = d.getUTCFullYear();
+    return y + '-W' + String(Math.ceil(((d - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7)).padStart(2, '0');
+  };
+  // 族群近 n 日漲跌：hist = { dates:[...], c:{ code:[close,...] } }（跟 dates 對齊）
+  C.groupWeek = (g, hist, names, n = 5) => {
+    const L = hist.dates.length; if (L < 2) return null;
+    const k = Math.max(0, L - 1 - n);
+    const members = g.codes.map((c) => { const a = hist.c[c]; if (!a || !(a[k] > 0) || !(a[L - 1] > 0)) return null; return [c, names[c] || c, ((a[L - 1] / a[k]) - 1) * 100]; }).filter(Boolean);
+    if (!members.length) return null;
+    members.sort((a, b) => b[2] - a[2]);
+    return { id: g.id, name: g.name, from: hist.dates[k], to: hist.dates[L - 1], pct5: members.reduce((a, b) => a + b[2], 0) / members.length, members };
   };
 
   // ───────────── 4. 深度報告 ─────────────

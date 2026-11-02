@@ -9,12 +9,12 @@
   save();
 
   // ───── 資料 ─────
-  let M = null, X = { items: {} }, byCode = new Map(), indAvg = {}, loadErr = '';
+  let M = null, X = { items: {} }, D = null, WK = null, RP = null, byCode = new Map(), indAvg = {}, loadErr = '';
   async function loadData() {
     try {
       const get = (f) => fetch(CFG.DATA + f + '?t=' + Math.floor(Date.now() / 300000), { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
-      const [m, x] = await Promise.all([get('market.json'), get('explain.json').catch(() => ({ items: {} }))]);
-      M = m; X = x;
+      const [m, x, d, w] = await Promise.all([get('market.json'), get('explain.json').catch(() => ({ items: {} })), get('daily.json').catch(() => null), get('weekly.json').catch(() => null)]);
+      M = m; X = x; D = d && d.date === m.date ? d : null; WK = w && w.groups && w.groups.length ? w : null;
       byCode = new Map(m.rows.map((r) => [r[0], Object.fromEntries(m.cols.map((k, i) => [k, r[i]]))]));
       const agg = {};
       for (const s of byCode.values()) { if (!/^[1-9]\d{3}$/.test(s.c) || s.val < 0.05) continue; const a = (agg[s.ind] ||= { t: 0, n: 0 }); a.t += s.pct; a.n++; }
@@ -22,6 +22,10 @@
       loadErr = '';
     } catch (e) { loadErr = '資料載入失敗，請檢查網路後重新整理。'; }
   }
+  // 個股報告書（約 200KB）：第一次打開報告書才載
+  let rpP = null;
+  const getReports = () => (rpP ||= fetch(CFG.DATA + 'reports.json?t=' + Math.floor(Date.now() / 300000), { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : { items: {} })).catch(() => ({ items: {} })).then((j) => (RP = j)));
+  const md = (d) => (d ? d.slice(5).replace('-', '/') : '');
   const stocksOnly = () => [...byCode.values()].filter((s) => /^[1-9]\d{3}$/.test(s.c));
 
   // FinMind：App 直接抓（免費、每個使用者自己算額度）
@@ -89,7 +93,7 @@
     const d = M ? M.date.slice(5).replace('-', '/') : '';
     $('#top').innerHTML = (opts.back ? '<button class="back" onclick="history.length>1?history.back():location.hash=\'#home\'">‹</button>' : '')
       + (opts.title ? `<span class="brand">${esc(opts.title)}</span>` : '<span class="brand">股市<i>白話通</i></span>')
-      + (d ? `<span class="date" id="dtag">資料 ${d}</span>` : '')
+      + (d ? `<span class="date" id="dtag">${d} 收盤</span>` : '')
       + `<a class="tb-ic" href="#search" aria-label="查詢股票" style="margin-left:auto">🔍</a><a class="pts" href="#me" id="pts" style="margin-left:4px"><span class="coin">點</span><span class="num" data-v="${S.pts}">${S.pts}</span></a>`;
     // 頂部背景跟著大盤紅綠（勾選連動：狀態一變，整個畫面跟著變）
     if (M?.index?.[0]) document.body.dataset.mkt = M.index[0].chg > 0 ? 'up' : M.index[0].chg < 0 ? 'down' : 'flat';
@@ -190,14 +194,36 @@
           const w = (v) => (v >= 0 ? '買' : '賣');
           return Math.sign(f) !== Math.sign(t) ? `外資${w(f)}、投信${w(t)}，法人看法分歧；合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。` : `外資和投信都在${w(f)}，合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。`; })()}</p></div>`,
     ];
+    // 自選股晨報（免費）：你的自選股上個交易日怎麼了
+    const wl = S.watch.map((c) => byCode.get(c)).filter(Boolean);
+    const wline = (s) => {
+      const ex = X.items[s.c], bits = [];
+      if (s.f) bits.push(`外資${s.f > 0 ? '買' : '賣'} ${Math.abs(s.f).toLocaleString('en-US')} 張`);
+      if (s.t) bits.push(`投信${s.t > 0 ? '買' : '賣'} ${Math.abs(s.t).toLocaleString('en-US')} 張`);
+      if (ex?.vr) bits.push(`量是平常的 ${ex.vr} 倍`);
+      return `<a class="wl" href="#s/${s.c}"><div><b>${esc(s.n)}</b> <span class="num ${cls(s.pct)}">${fp(s.pct)}</span>${ex ? '<span class="badge-ai">解說</span>' : ''}<small>${bits.join('・') || '—'}</small></div><span class="mute">›</span></a>`;
+    };
+    const wbest = [...wl].sort((a, b) => b.pct - a.pct);
+    const watchCard = wl.length ? `<div class="card"><h3>⭐ 自選股晨報<small>${md(M.date)} 收盤</small></h3>
+      <p class="small sub">你的 ${wl.length} 檔自選股：${wl.filter((s) => s.pct > 0).length} 漲、${wl.filter((s) => s.pct < 0).length} 跌。表現最好的是 <b>${esc(wbest[0].n)}</b>（<span class="${cls(wbest[0].pct)}">${fp(wbest[0].pct)}</span>）${wl.length > 1 ? `，最差的是 <b>${esc(wbest[wbest.length - 1].n)}</b>（<span class="${cls(wbest[wbest.length - 1].pct)}">${fp(wbest[wbest.length - 1].pct)}</span>）` : ''}。</p>
+      <div class="wls">${wl.slice(0, 8).map(wline).join('')}</div>${wl.length > 8 ? '<a class="btn block" href="#watch" style="margin-top:8px">看全部自選</a>' : ''}</div>` : '';
+    const dailyCard = D ? `<div class="card daily"><div class="dl-h"><span class="tagai">🤖 AI 盤後日報</span><small class="mute">${md(D.date)} 收盤後</small></div>
+      <h2>${esc(D.title)}</h2><p class="dl-t" id="dlt">${esc(D.text)}</p>
+      ${D.focus?.length ? `<div class="chips" style="margin-top:8px">${D.focus.map((c) => byCode.get(c)).filter(Boolean).map((s) => `<a class="chip" href="#s/${s.c}">${esc(s.n)} <b class="num ${cls(s.pct)}">${fp(s.pct, 1)}</b></a>`).join('')}</div>` : ''}
+      <p class="disc">${D.ai ? '由 AI 根據證交所、櫃買中心公開資料和新聞標題整理，可能有錯，不是投資建議。' : '由程式根據公開資料整理。'}</p></div>` : '';
+    const weekCard = WK ? `<a class="card wkc" href="#weekly"><div class="row"><h3 style="margin:0">🏭 概念股 AI 週報<small>近 5 個交易日・到 ${md(WK.groups[0].to)}</small></h3><span class="mute" style="margin-left:auto">›</span></div>
+      <div class="chips" style="margin-top:8px">${WK.groups.slice(0, 3).map((g) => `<span class="chip">${esc(g.name)} <b class="num ${cls(g.pct5)}">${fp(g.pct5, 1)}</b></span>`).join('')}<span class="chip">…還有 ${Math.max(0, WK.groups.length - 3)} 個</span></div>
+      <p class="small sub" style="margin-top:6px">12 個族群這週誰強誰弱、為什麼（${Core.ECON.COST.weekly} 點）</p></a>` : '';
     $('#view').innerHTML = `
       <a class="search" href="#search"><span>🔍</span><span class="mute">輸入代號或名稱，例如 2330、台積電</span></a>
+      ${dailyCard}${watchCard}
       <div class="snap" id="snap">${cards.join('')}</div>
       <div class="dots" id="dots">${cards.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>
       <div class="card"><h3>族群強弱<small>同產業平均漲跌・點了看熱力圖</small></h3>
         <div class="chips">${M.sectors.slice(0, 6).map((x) => `<a class="chip" href="#heat/ind:${encodeURIComponent(x.ind)}">${esc(x.ind)} <b class="num ${cls(x.pct)}">${fp(x.pct, 1)}</b></a>`).join('')}</div>
         <div class="chips" style="margin-top:6px">${M.sectors.slice(-4).reverse().map((x) => `<a class="chip" href="#heat/ind:${encodeURIComponent(x.ind)}">${esc(x.ind)} <b class="num ${cls(x.pct)}">${fp(x.pct, 1)}</b></a>`).join('')}</div>
         <a class="btn block" href="#heat" style="margin-top:10px">🔥 看全市場熱力圖</a></div>
+      ${weekCard}
       <div class="card"><div class="tabs" id="tabs">${Object.entries(L).map(([k, v]) => `<button data-k="${k}" class="${k === homeTab ? 'on' : ''}">${v}</button>`).join('')}</div><div id="hl"></div>
         <p class="disc">有「解說」標籤的是今天的熱門股，已經準備好白話解說。其他股票打開時才即時整理。</p></div>
       ${disclaimer}`;
@@ -311,9 +337,9 @@
   const deepCache = new Map();
   function drawDeep(s, fresh) {
     const el = $('#deep'); if (!el) return;
-    const head = '<h3>📑 深度報告<small>籌碼・營收・評價・歷史相似</small></h3>';
+    const head = '<h3>📑 AI 個股報告書<small>籌碼・營收・評價・歷史相似</small></h3>';
     if (!Core.isUnlocked(S, s.c, 'deep', M.date)) {
-      el.innerHTML = head + lockBox(s, 'deep', '偏多訊號和偏空訊號各有幾個？外資投信近 20 天的動向、融資有沒有暴增、月營收年增率、本益比貴不貴、歷史上走勢很像的時候之後怎麼走，還有魔鬼代言人的風險清單…');
+      el.innerHTML = head + lockBox(s, 'deep', 'AI 幫你讀完 3 年股價、法人、融資、營收、本益比，寫成一份有結論的報告：偏多和偏空訊號各有幾個？外資投信近 20 天的動向、融資有沒有暴增、月營收年增率、本益比貴不貴、歷史上走勢很像的時候之後怎麼走，還有魔鬼代言人的風險清單…');
       el.querySelector('[data-unlock]').onclick = (e) => tryUnlock(s.c, 'deep', (f) => drawDeep(s, f), e.currentTarget);
       return;
     }
@@ -321,13 +347,13 @@
     let p = deepCache.get(s.c);
     if (!p) {
       const d = M.date, q = (start) => ({ data_id: s.c, start_date: start });
-      p = Promise.all([
+      p = getReports().then((rp) => { const it = rp.items?.[s.c]; if (it?.R) return { ...it.R, aiText: it.ai, made: it.d }; return Promise.all([
         fm('TaiwanStockPrice', q(addDays(d, -3 * 365))),
         fm('TaiwanStockInstitutionalInvestorsBuySell', q(addDays(d, -45))).catch(() => []),
         fm('TaiwanStockMarginPurchaseShortSale', q(addDays(d, -45))).catch(() => []),
         fm('TaiwanStockMonthRevenue', q(addDays(d, -500))).catch(() => []),
         fm('TaiwanStockPER', q(addDays(d, -365))).catch(() => []),
-      ]).then(([prices, inst, margin, rev, per]) => Core.analyze({ prices, inst, margin, rev, per }));
+      ]).then(([prices, inst, margin, rev, per]) => Core.analyze({ prices, inst, margin, rev, per })); });
       deepCache.set(s.c, p); p.catch(() => deepCache.delete(s.c));
     }
     p.then((R) => {
@@ -338,7 +364,8 @@
       // 疊卡：各項分析先疊成一疊（上面露出標題），點開依序攤開，再點收起
       const n = R.sections.length;
       el.classList.toggle('reveal', !!fresh);
-      el.innerHTML = head + `<div class="summary">${esc(R.summary)}</div>
+      const aiBox = R.aiText ? `<div class="aic"><b>🤖 AI 結論</b><p>${esc(R.aiText)}</p></div>` : `<p class="small mute" style="margin:0 0 8px">這檔不在每天的 AI 報告名單（成交值前 100 檔）內，以下是程式即時整理的報告，沒有 AI 結論。</p>`;
+      el.innerHTML = head + aiBox + `<div class="summary">${esc(R.summary)}</div>
         <div class="meter"><i style="width:${(R.bull / tot) * 100}%;background:var(--up)"></i><i style="width:${(R.bear / tot) * 100}%;background:var(--down)"></i></div>
         <div class="row small" style="margin-bottom:10px"><span class="up">偏多 ${R.bull}</span><span class="down" style="margin-left:auto">偏空 ${R.bear}</span></div>
         <div class="deck" id="dk">
@@ -347,7 +374,7 @@
           <button class="deck-btn btn block"><span class="o">展開 ${n} 項分析 ▾</span><span class="c">收起 ▴</span></button>
         </div>
         <div class="risk"><b>😈 魔鬼代言人：要注意的地方</b><ul>${R.risks.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>
-        <p class="disc">資料到 ${esc(R.date)}。「偏多／偏空」只是把資料分類，不是叫你買或賣。</p>`;
+        <p class="disc">資料到 ${esc(R.date)}${R.made && R.made < M.date ? `（熱門股每天輪流更新，這份是 ${md(R.made)} 做的）` : ''}。「偏多／偏空」只是把資料分類，不是叫你買或賣。${R.aiText ? 'AI 結論由程式讀上面的資料寫成，可能有錯。' : ''}</p>`;
       FX.deck($('#dk'));
     }).catch((e) => { el.innerHTML = head + `<p class="empty">${esc(e.message)}</p><button class="btn block" id="dpr">重試（不用再扣點）</button>`; $('#dpr').onclick = () => drawDeep(s); });
   }
@@ -449,6 +476,26 @@
     });
   }
 
+  V.weekly = () => {
+    top({ back: true, title: '概念股 AI 週報' });
+    if (!M) return ($('#view').innerHTML = pageSkel);
+    if (!WK) return ($('#view').innerHTML = '<p class="empty">週報還沒準備好（每週五收盤後產生）</p>');
+    const key = 'W' + WK.week;
+    const head = `<div class="card"><h3>🏭 概念股 AI 週報<small>近 5 個交易日・到 ${md(WK.groups[0].to)}</small></h3>
+      <div class="wk-bars">${WK.groups.map((g) => { const w = Math.min(100, Math.abs(g.pct5) * 8); return `<div class="wk-b"><span>${esc(g.name)}</span><div class="ib-t"><i class="${cls(g.pct5)}" style="${g.pct5 >= 0 ? 'left:50%' : 'right:50%'};width:${w / 2}%"></i></div><b class="num ${cls(g.pct5)}">${fp(g.pct5, 1)}</b></div>`; }).join('')}</div>
+      <p class="small sub" style="margin-top:8px">${esc(WK.summary)}</p></div>`;
+    if (!Core.isUnlocked(S, key, 'weekly', M.date)) {
+      $('#view').innerHTML = head + `<div class="card">${lockBox({ c: key }, 'weekly', '每個族群這週為什麼強、為什麼弱？誰帶頭、誰拖累？AI 讀完成員股票的漲跌和解說，一個族群一段話寫給你看…')}</div>${disclaimer}`;
+      $('#view').querySelector('[data-unlock]').onclick = (e) => tryUnlock(key, 'weekly', () => V.weekly(), e.currentTarget);
+      return;
+    }
+    $('#view').innerHTML = head + WK.groups.map((g) => `<div class="card wkg"><div class="row"><h3 style="margin:0">${esc(g.name)}</h3><b class="num ${cls(g.pct5)}" style="margin-left:auto;font-size:18px">${fp(g.pct5)}</b></div>
+      <p class="wk-t">${g.ai ? '🤖 ' : ''}${esc(g.text)}</p>
+      <div class="chips">${g.members.map((m) => `<a class="chip" href="#s/${m[0]}">${esc(m[1])} <b class="num ${cls(m[2])}">${fp(m[2], 1)}</b></a>`).join('')}</div>
+      <a class="small" href="#heat/grp:${g.id}" style="display:inline-block;margin-top:8px">看熱力圖 ›</a></div>`).join('')
+      + `<p class="disc">週漲跌＝成員股票近 5 個交易日漲跌的平均。概念股分類是人工整理的代表股。${WK.ai ? '各族群的說明由 AI 根據公開資料整理，可能有錯，' : ''}不是投資建議。</p>`;
+  };
+
   V.watch = () => {
     top();
     if (!M) return ($('#view').innerHTML = spin);
@@ -501,7 +548,7 @@
         <p>${esc(G.s.n)}（${G.s.c}）<br><span class="mute small">${G.rows[0].date} ～ ${G.rows[SHOW + AHEAD - 1].date}</span></p>
         <p>你猜 <b class="num ${cls(G.guess)}">${fp(G.guess, 0)}</b>，實際 ${AHEAD} 個交易日 <b class="num ${cls(r)}">${fp(r, 1)}</b>（${a} → ${b} 元）</p></div>
         ${chart(G.rows, { split: SHOW - 1 })}
-        <p class="disc">股價短期走勢很難猜，答對率能長期贏過 50% 已經不容易。想知道現在的情況，可以看個股的「深度報告」。</p>
+        <p class="disc">股價短期走勢很難猜，答對率能長期贏過 50% 已經不容易。想知道現在的情況，可以看「AI 個股報告書」。</p>
         <a class="btn block" href="#s/${G.s.c}" style="margin-top:8px">看 ${esc(G.s.n)} 現在的資料</a></div>`;
     } else body = `<div class="card"><h3>🎯 歷史盲測</h3><p class="sub">從台股過去的真實走勢隨機挑一段，把股票名稱和日期遮起來，讓你猜之後會漲還是跌，答完才揭曉。用來測試自己看圖的直覺準不準。</p>${G.err ? `<p class="small" style="color:var(--gold);margin-top:6px">${esc(G.err)}</p>` : ''}</div>`;
     $('#view').innerHTML = body + (G.phase === 'ask' || G.phase === 'loading' ? '' : moreBtn) + `<div style="height:12px"></div>` + stats;
@@ -549,7 +596,7 @@
         </div></div>
       <div class="card"><h3>點數怎麼用</h3><table class="rules">
         <tr><td>🤖 白話解說：今天為什麼漲跌</td><td>${E.COST.explain} 點</td></tr>
-        <tr><td>📑 深度報告：籌碼、營收、評價、歷史相似、風險</td><td>${E.COST.deep} 點</td></tr>
+        <tr><td>📑 AI 個股報告書：籌碼、營收、評價、歷史相似、風險＋AI 結論</td><td>${E.COST.deep} 點</td></tr><tr><td>🏭 概念股 AI 週報：12 個族群這週誰強誰弱</td><td>${E.COST.weekly} 點</td></tr><tr><td>🤖 AI 盤後日報、⭐ 自選股晨報</td><td>免費</td></tr>
         <tr><td>🔍 查股價、走勢、法人、自選股</td><td>免費</td></tr>
         <tr><td>🎯 歷史盲測</td><td>每天 ${E.GAME_FREE} 題免費</td></tr></table>
         <p class="disc">同一檔股票的同一份報告，當天看過可以免費重看。新朋友送 ${E.START} 點。</p></div>

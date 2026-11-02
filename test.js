@@ -111,6 +111,18 @@ R = C.analyze({ prices: mk(700, (i) => 300 - i * 0.3 + Math.sin(i / 7) * 4) });
 t('下跌趨勢偏空', R.bear >= 2 && /偏弱|差不多/.test(R.summary));
 t('一定有風險清單', R.risks.length >= 1);
 
+// ── 盤後 AI 報告 ──
+t('週次', C.weekKey('2026-11-02') === '2026-W45' && C.weekKey('2026-11-08') === '2026-W45' && C.weekKey('2026-01-01') === '2026-W01');
+const body = '今天加權指數下跌 0.65%，收在 44,920 點，下跌家數比上漲多。外資賣超約 500 億，投信小幅買超。半導體和電子零組件偏弱，航運相對抗跌。焦點股聯發科逆勢上漲 1.4%，投信買超。';
+t('日報：解析標題和內文', C.parseDaily('標題：台積電領跌，加權失守四萬五\n\n' + body)?.title === '台積電領跌，加權失守四萬五');
+t('日報：沒有標題不收', C.parseDaily(body) === null);
+t('日報：有買賣建議不收', C.parseDaily('標題：今天大跌\n' + body + '建議買進台積電。') === null);
+t('報告書 AI 長度上限可調', C.aiOk('字'.repeat(340), 360, 60) && !C.aiOk('字'.repeat(340)));
+const hist = { dates: ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'], c: { A: [100, 0, 0, 0, 0, 110], B: [50, 0, 0, 0, 0, 45], Z: [null, 1, 1, 1, 1, 1] } };
+const gw = C.groupWeek({ id: 'x', name: '測試', codes: ['A', 'B', 'Z'] }, hist, { A: '甲', B: '乙' }, 5);
+t('族群週漲跌：平均、排序、缺資料略過', gw.members.length === 2 && gw.members[0][1] === '甲' && Math.abs(gw.pct5 - 0) < 1e-9 && gw.from === 'd1' && gw.to === 'd6');
+t('報告書提示：有資料日期和風險', /資料日期 2026-11-02[\s\S]*【風險】/.test(C.reportPrompt('台積電', '2330', { date: '2026-11-02', summary: 's', bull: 1, bear: 2, sections: [{ title: '股價', lines: ['x'] }], risks: ['r'] }).user));
+
 // ── 盤中即時報價（live.js）──
 const L = require('./live.js');
 const tp = (s) => Date.parse(s + '+08:00'); // 台北時間
