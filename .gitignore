@@ -1,0 +1,11 @@
+pipeline/cache/
+pipeline/last-run.log
+node_modules/
+pipeline/.env
+.env
+www/
+ios/App/Pods/
+ios/App/output/
+*.ipa
+.DS_Store
+上架素材/影片/*.mp4

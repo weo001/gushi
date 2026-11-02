@@ -1,0 +1,10 @@
+{
+  "appId": "tw.gushi.baihua",
+  "appName": "股市白話通",
+  "webDir": "www",
+  "backgroundColor": "#0b1020",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": true
+  }
+}

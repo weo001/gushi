@@ -1,0 +1,86 @@
+# 在 GitHub 的雲端 Mac 上打包正式版（有簽名），自動上傳到 App Store Connect（TestFlight）
+# 用法：GitHub 網頁 → Actions → 上傳 TestFlight → Run workflow
+# 上傳後約 10～30 分鐘，App Store Connect 的 TestFlight 分頁會出現新的建置版本
+# 需要的 Secrets：ASC_KEY_ID、ASC_ISSUER_ID、ASC_KEY_P8、DIST_P12_BASE64、DIST_P12_PASSWORD、PROFILE_BASE64
+name: 上傳 TestFlight
+on:
+  workflow_dispatch:
+jobs:
+  testflight:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      TEAM_ID: 225SSH579F
+      BUNDLE_ID: tw.gushi.baihua
+      PROFILE_NAME: gushi AppStore 1793651331433
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: 顯示 Xcode 版本（Apple 要求 Xcode 26 以上）
+        run: xcodebuild -version
+      - name: 安裝套件
+        run: npm ci
+      - name: 複製 App 檔案、同步到 iOS 專案
+        run: npm run build && npx cap sync ios
+      - name: 安裝發布憑證和描述檔
+        env:
+          P12: ${{ secrets.DIST_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
+          PROFILE: ${{ secrets.PROFILE_BASE64 }}
+        run: |
+          KC=$RUNNER_TEMP/build.keychain-db
+          KCPW=$(openssl rand -hex 12)
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$P12" | base64 --decode > $RUNNER_TEMP/dist.p12
+          security import $RUNNER_TEMP/dist.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KC"
+          echo "$PROFILE" | base64 --decode > $RUNNER_TEMP/app.mobileprovision
+          UUID=$(security cms -D -i $RUNNER_TEMP/app.mobileprovision | plutil -extract UUID raw -)
+          for D in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$D"; cp $RUNNER_TEMP/app.mobileprovision "$D/$UUID.mobileprovision"
+          done
+      - name: 打包（Archive）
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath $RUNNER_TEMP/App.xcarchive \
+            CURRENT_PROJECT_VERSION=$BUILD_NUMBER archive
+          test -f $RUNNER_TEMP/App.xcarchive/Products/Applications/App.app/public/index.html
+      - name: 上傳到 App Store Connect
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          echo "$ASC_KEY_P8" > $RUNNER_TEMP/AuthKey.p8
+          cat > $RUNNER_TEMP/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROFILE_NAME</string></dict>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist -exportPath $RUNNER_TEMP/export \
+            -authenticationKeyPath $RUNNER_TEMP/AuthKey.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          echo "已上傳建置版本 $BUILD_NUMBER"
+      - name: 清除鑰匙圈
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/build.keychain-db || true
+          rm -f $RUNNER_TEMP/dist.p12 $RUNNER_TEMP/AuthKey.p8

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>股市白話通</title>
+<meta name="description" content="用白話告訴你，股票今天為什麼漲跌。">
+<meta name="theme-color" content="#0b1020">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* 深藍底＋台股配色（紅漲綠跌）。間距 4 的倍數；圓角 10／16 */
+:root{
+  --bg:#0b1020;--s1:#121a2e;--s2:#18223a;--s3:#212c48;--line:#253150;--line2:#33416a;
+  --text:#eef2fb;--sub:#aab4cc;--mute:#717d99;
+  --up:#ff5b5b;--up-bg:rgba(255,91,91,.13);--down:#2fcf7f;--down-bg:rgba(47,207,127,.13);
+  --acc:#5b9dff;--acc2:#8f7bff;--gold:#ffc85b;--gold-ink:#2a1d00;
+  --r1:10px;--r2:16px;
+  --font:"Noto Sans TC",system-ui,-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+  --num:"Outfit","Noto Sans TC",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit;border:0;background:none}
+button{cursor:pointer}
+a{color:var(--acc);text-decoration:none}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--sub)}
+.app{max-width:560px;margin:0 auto;min-height:100vh;padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+
+/* 頂部 */
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;background:rgba(11,16,32,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.top .back{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:20px;margin-left:-6px}
+.top .back:hover{background:var(--s2)}
+.brand{font-weight:900;font-size:17px;letter-spacing:.5px}
+.brand i{font-style:normal;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.top .date{font-size:12px;color:var(--mute);margin-left:2px}
+.pts{margin-left:auto;display:flex;align-items:center;gap:6px;padding:5px 12px 5px 8px;border-radius:99px;background:var(--s2);border:1px solid var(--line2);font-weight:700}
+.pts .coin{width:20px;height:20px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffe7a8,var(--gold) 55%,#c98d1c);display:grid;place-items:center;font-size:11px;color:var(--gold-ink);font-weight:900}
+.pts.bump{animation:bump .5s}
+@keyframes bump{40%{transform:scale(1.18)}}
+
+/* 底部選單 */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;justify-content:center;background:rgba(14,20,38,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+.nav div{display:flex;width:100%;max-width:560px}
+.nav a{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0 7px;color:var(--mute);font-size:11px}
+.nav a b{font-size:20px;line-height:1.2;filter:grayscale(.7);opacity:.75}
+.nav a.on{color:var(--text)}.nav a.on b{filter:none;opacity:1}
+
+/* 通用 */
+main{padding:12px 16px 24px}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:var(--r2);padding:14px;margin-bottom:12px}
+.card h3{font-size:15px;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.card h3 small{margin-left:auto;font-weight:400;color:var(--mute);font-size:12px}
+.sub{color:var(--sub)}.mute{color:var(--mute)}.small{font-size:12.5px}
+.row{display:flex;gap:8px;align-items:center}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 16px;border-radius:var(--r1);font-weight:700;background:var(--s3);border:1px solid var(--line2)}
+.btn.pri{background:linear-gradient(135deg,var(--acc),var(--acc2));border:0;color:#fff}
+.btn.gold{background:linear-gradient(135deg,#ffe08a,var(--gold));border:0;color:var(--gold-ink)}
+.btn.block{width:100%}
+.btn:disabled{opacity:.45;cursor:default}
+.tag{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;background:var(--s3);color:var(--sub);margin:2px 4px 2px 0}
+.badge-ai{font-size:10px;font-weight:700;padding:0 5px;border-radius:4px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;margin-left:4px;vertical-align:1px}
+.search{display:flex;align-items:center;gap:8px;background:var(--s2);border:1px solid var(--line2);border-radius:var(--r1);padding:9px 12px;margin-bottom:12px}
+.search input{flex:1;outline:0;min-width:0}
+.empty{text-align:center;color:var(--mute);padding:28px 0}
+.disc{font-size:11.5px;color:var(--mute);line-height:1.6;margin-top:8px}
+.spin{width:22px;height:22px;border:3px solid var(--line2);border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;margin:18px auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* 大盤 */
+.idx .v{font-size:22px;font-weight:700}
+.idx .c{font-size:13px;font-weight:600}
+.bar3{display:flex;height:8px;border-radius:99px;overflow:hidden;margin:8px 0 4px}
+.bar3 i{display:block}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12.5px;padding:4px 10px;border-radius:99px;background:var(--s2);border:1px solid var(--line)}
+.tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;margin:-2px 0 8px}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{flex:none;padding:6px 12px;border-radius:99px;font-size:13px;color:var(--sub);background:var(--s2)}
+.tabs button.on{background:var(--text);color:var(--bg);font-weight:700}
+
+/* 股票列表 */
+.list{display:flex;flex-direction:column}
+.it{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line)}
+.it:last-child{border-bottom:0}
+.it .nm{flex:1;min-width:0}
+.it .nm b{font-weight:700}
+.it .nm small{display:block;color:var(--mute);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .px{text-align:right;font-weight:600}
+.it .pc{min-width:74px;text-align:center;padding:4px 0;border-radius:8px;font-weight:700;font-size:14px}
+.pc.up{background:var(--up-bg)}.pc.down{background:var(--down-bg)}.pc.flat{background:var(--s2)}
+
+/* 個股 */
+.hero .nm{font-size:20px;font-weight:900}
+.hero .px{font-size:34px;font-weight:700;line-height:1.1;margin-top:4px}
+.hero .ch{font-size:15px;font-weight:600}
+.star{margin-left:auto;font-size:24px;line-height:1;padding:4px}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.kv div{background:var(--s2);border-radius:var(--r1);padding:7px 10px}
+.kv small{display:block;color:var(--mute);font-size:11.5px}
+.kv b{font-family:var(--num);font-size:14.5px}
+.chart{width:100%;height:auto;display:block}
+.lock{position:relative;text-align:center;padding:18px 8px 8px}
+.lock .blur{filter:blur(5px);opacity:.5;user-select:none;text-align:left;font-size:14px;line-height:1.8;margin-bottom:14px}
+.lock .cost{font-size:12.5px;color:var(--mute);margin-top:6px}
+.explain{font-size:15.5px;line-height:1.9}
+.news{margin-top:10px;border-top:1px dashed var(--line2);padding-top:8px}
+.news a{display:block;font-size:13.5px;padding:5px 0;color:var(--sub)}
+.news a small{color:var(--mute);margin-left:6px}
+.sec{padding:10px 0;border-bottom:1px solid var(--line)}
+.sec:last-child{border-bottom:0}
+.sec h4{font-size:14.5px;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+.sec h4 .dot{width:8px;height:8px;border-radius:50%;margin-left:auto}
+.sec p{font-size:14px;color:var(--sub);line-height:1.75}
+.summary{font-size:16px;font-weight:700;padding:10px 12px;border-radius:var(--r1);background:var(--s2);margin-bottom:6px}
+.meter{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--s3);margin:8px 0 2px}
+.risk{background:rgba(255,200,91,.08);border:1px solid rgba(255,200,91,.25);border-radius:var(--r1);padding:10px 12px;margin-top:10px}
+.risk b{color:var(--gold)}
+.risk li{margin-left:18px;font-size:14px;color:var(--sub);line-height:1.75}
+
+/* 盲測 */
+.qbtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.qbtns button{padding:14px;border-radius:var(--r2);font-size:17px;font-weight:900}
+.qbtns .u{background:var(--up-bg);color:var(--up);border:1px solid rgba(255,91,91,.4)}
+.qbtns .d{background:var(--down-bg);color:var(--down);border:1px solid rgba(47,207,127,.4)}
+.result{text-align:center;padding:8px 0}
+.result .big{font-size:26px;font-weight:900}
+.stat3{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;gap:8px}
+.stat3 b{display:block;font-family:var(--num);font-size:20px}
+.stat3 small{color:var(--mute);font-size:12px}
+
+/* 我的 */
+.wallet{text-align:center;padding:22px 14px;background:radial-gradient(120% 90% at 50% 0%,rgba(255,200,91,.16),transparent 60%),var(--s1)}
+.wallet .big{font-size:44px;font-weight:700;line-height:1.1}
+.rules td{padding:6px 4px;border-bottom:1px solid var(--line);font-size:14px}
+.rules td:last-child{text-align:right;font-weight:700;white-space:nowrap}
+.rules{width:100%;border-collapse:collapse}
+.loglist div{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;border-bottom:1px solid var(--line)}
+
+/* 彈出視窗 */
+.modal{position:fixed;inset:0;z-index:50;background:rgba(3,6,14,.72);display:flex;align-items:flex-end;justify-content:center;animation:fd .2s}
+.modal .box{width:100%;max-width:560px;background:var(--s1);border-top:1px solid var(--line2);border-radius:20px 20px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));animation:su .25s}
+.modal h2{font-size:18px;margin-bottom:6px}
+@keyframes fd{from{opacity:0}}@keyframes su{from{transform:translateY(40px)}}
+.toast{position:fixed;left:50%;top:calc(70px + env(safe-area-inset-top));transform:translateX(-50%);z-index:60;background:var(--text);color:var(--bg);padding:8px 16px;border-radius:99px;font-weight:700;font-size:14px;animation:fd .2s;white-space:nowrap}
+
+/* 假廣告（網頁版測試用；App 版是真的 AdMob）*/
+.inter{position:fixed;inset:0;z-index:80;background:#05070d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#fff;padding:20px}
+.inter .x{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;padding:6px 12px;border-radius:99px;background:rgba(255,255,255,.12);font-size:14px}
+.inter .x.ok{background:var(--gold);color:var(--gold-ink);font-weight:700}
+.inter .adbox{width:min(320px,90vw);aspect-ratio:1;border:2px dashed #3a4466;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#9aa6c4}
+.inter .adbox small{font-size:12px;color:#66708c}
+.inter.rew .rtop{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;display:flex;align-items:center;gap:10px;font-size:13px}
+.inter.rew .rtop .x{position:static;margin-left:auto}
+.inter .rlbl{padding:2px 8px;border-radius:4px;background:var(--gold);color:var(--gold-ink);font-weight:700;font-size:11px}
+.inter .rbar{width:min(320px,90vw);height:4px;background:#1c2338;border-radius:9px;overflow:hidden}
+.inter .rbar i{display:block;height:100%;width:0;background:var(--gold)}
+.inter .rask{position:absolute;inset:auto 0 0;background:#121a2e;padding:20px;text-align:center;border-radius:20px 20px 0 0}
+.inter .rask .row{justify-content:center;margin-top:12px}
+.inter .btn.line{background:transparent;border:1px solid #3a4466}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top" id="top"></header>
+  <main id="view"></main>
+</div>
+<nav class="nav"><div id="nav">
+  <a href="#home" data-r="home"><b>🏠</b>大盤</a>
+  <a href="#search" data-r="search"><b>🔍</b>查詢</a>
+  <a href="#watch" data-r="watch"><b>⭐</b>自選</a>
+  <a href="#game" data-r="game"><b>🎯</b>盲測</a>
+  <a href="#me" data-r="me"><b>🪙</b>點數</a>
+</div></nav>
+<script>
+  // 資料放哪：網頁版跟 App 同一個網站就用 ./data/；包成 iPhone App 後改抓網站上的檔案
+  window.CFG = {
+    DATA: (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ? 'https://weo001.github.io/gushi/data/' : './data/',
+  };
+</script>
+<script src="core.js"></script>
+<script src="ads.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

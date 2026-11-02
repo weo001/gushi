@@ -1,0 +1,12 @@
+{
+  "name": "股市白話通",
+  "short_name": "白話通",
+  "description": "用白話告訴你，股票今天為什麼漲跌。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

@@ -1,0 +1,29 @@
+# 每個交易日收盤後自動更新資料（GitHub Actions，公開儲存庫免費）
+# 17:30、20:30（台灣時間）各跑一次；第二次只補晚更新的資料，已做好的 AI 解說不會重做
+name: 每日更新資料
+on:
+  schedule:
+    - cron: '30 9 * * 1-5'
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: 抓資料、產生解說
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: node pipeline/build.js
+      - name: 存回儲存庫（GitHub Pages 會自動更新網站）
+        run: |
+          git config user.name "daily-bot"
+          git config user.email "daily-bot@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || (git commit -m "資料更新 $(date -u +%F)" && git push)
