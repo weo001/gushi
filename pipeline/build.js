@@ -201,7 +201,7 @@ async function groq(prompt) {
       let text = rule.text, ai = false;
       if (prev[s.c]?.ai) { text = prev[s.c].t; ai = true; }
       else if (GROQ_KEY) {
-        const t = await groq(Core.aiPrompt(ctx));
+        const t = Core.aiClean(await groq(Core.aiPrompt(ctx)));
         if (Core.aiOk(t)) { text = t; ai = true; } else if (t) log('  AI 回答不合格，改用規則版：', t.slice(0, 60));
       }
       ai ? aiN++ : ruleN++;

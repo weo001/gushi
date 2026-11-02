@@ -217,6 +217,14 @@
     };
   };
   // 檢查 AI 回答能不能用（太短、太長、有建議字眼、簡體字太多就不用）
+  // AI 已經講了原因，最後又補「看不出明確原因」→ 把那句拿掉（前後矛盾）
+  C.aiClean = (t) => {
+    if (!t) return t;
+    const parts = t.split(/(?<=[。！])/);
+    if (parts.length < 2) return t;
+    const kept = parts.filter((x) => !/看不出明確原因/.test(x));
+    return kept.length && kept.join('').length >= 40 ? kept.join('').trim() : t;
+  };
   C.aiOk = (t) => {
     if (typeof t !== 'string') return false;
     t = t.trim();
