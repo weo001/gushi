@@ -7,15 +7,15 @@
 // 「沒廣告可播」和「廣告壞掉」不能卡住使用者：查股票照樣能查，只是領不到點數。
 (function () {
   // AdMob 帳號 brucectobnb@gmail.com（發布商 pub-4447189266414871）。
-  // 「股市白話通」還沒在 AdMob 建 App：建好後把下面 PROD 換成正式編號，ADS_TEST 改成 false。
+  // 「股市白話通」AdMob App ID ca-app-pub-4447189266414871~2745891219（2026-11-03 建立）
   // 自己的手機測正式廣告前，要先在 AdMob「設定→測試裝置」加上這台手機，不然會被當成無效流量。
-  const ADS_TEST = true;
+  const ADS_TEST = false;
   const TEST = {
     ios: { rewarded: 'ca-app-pub-3940256099942544/1712485313', interstitial: 'ca-app-pub-3940256099942544/4411468910' },
     android: { rewarded: 'ca-app-pub-3940256099942544/5224354917', interstitial: 'ca-app-pub-3940256099942544/1033173712' },
   };
-  const PROD = { // TODO：在 AdMob 建好「股市白話通」後填入
-    ios: { rewarded: '', interstitial: '' },
+  const PROD = {
+    ios: { rewarded: 'ca-app-pub-4447189266414871/6146739318', interstitial: 'ca-app-pub-4447189266414871/9483736136' },
     android: { rewarded: '', interstitial: '' },
   };
 
