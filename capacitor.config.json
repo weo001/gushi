@@ -6,10 +6,5 @@
   "ios": {
     "contentInset": "never",
     "scrollEnabled": true
-  },
-  "plugins": {
-    "CapacitorHttp": {
-      "enabled": true
-    }
   }
 }

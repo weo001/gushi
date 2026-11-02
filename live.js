@@ -36,7 +36,9 @@
   let sysDate = null, last = 0, busy = false, fails = 0;
   const native = () => !!(root.Capacitor && root.Capacitor.isNativePlatform && root.Capacitor.isNativePlatform());
   const base = () => (native() ? 'https://mis.twse.com.tw/' : root.location && /^(localhost|127\.0\.0\.1)$/.test(root.location.hostname) ? '/__mis/' : null);
-  const enabled = () => !!base();
+  // 2026-11-03 暫停：證交所即時行情商業使用要授權付費 → App 只做盤後資料。以後買了授權再改成 true
+  const ON = false;
+  const enabled = () => ON && !!base();
   // keys：['tse_2330', 'otc_6488', 'tse_t00', 'otc_o00']
   async function fetchKeys(keys) {
     const b = base(); if (!b || busy || !keys.length) return false;
