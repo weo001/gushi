@@ -13,7 +13,7 @@ const H = 3600e3;
   t('公告：news.js 的版本跟 App 版本一樣（' + ver + '），更新紀錄最上面是這一版', N.NEWS && N.NEWS.ver === ver && N.NEWS.log[0].ver === ver);
   t('公告：每筆更新紀錄都有版號、日期、標題、內容', N.NEWS.log.every((v) => v.ver && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.title && v.items.length));
   t('公告：開發中不寫日期', !/\d{4}[-\/年]|\d+\s*月/.test(JSON.stringify(N.NEWS.soon)));
-  t('公告：studio-news.js 跟共用版一樣', R('studio-news.js') === R('../../行銷推廣/共用/studio-news.js'));
+  t('公告：studio-news.js 跟共用版一樣', R('studio-news.js').replace(/\r\n/g, '\n') === R('../../行銷推廣/共用/studio-news.js').replace(/\r\n/g, '\n'));
   t('公告：打包和離線快取都有放公告檔', /'news\.js', 'studio-news\.js'/.test(R('scripts/build.js')) && /'news\.js', 'studio-news\.js'/.test(R('sw.js')));
   t('公告：index.html 有載入公告、app.js 有啟動公告', /<script src="news\.js"><\/script>\s*<script src="studio-news\.js"><\/script>/.test(R('index.html')) && /STUDIO_NEWS\.init\(\{\s*game: 'gushi'/.test(R('app.js')));
 }
