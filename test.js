@@ -5,6 +5,19 @@ const t = (name, cond) => { if (cond) ok++; else { bad++; console.log('✗', nam
 const T0 = Date.parse('2026-11-02T02:00:00Z'); // 台灣 10:00
 const H = 3600e3;
 
+// ── 公告（news.js＋共用的 studio-news.js）──
+{
+  const _fs = require('fs'), _p = require('path'), R = (f) => _fs.readFileSync(_p.join(__dirname, f), 'utf8');
+  const N = {}; new Function('window', R('news.js'))(N);
+  const ver = (R('ios/App/App.xcodeproj/project.pbxproj').match(/MARKETING_VERSION = ([\d.]+);/) || [])[1];
+  t('公告：news.js 的版本跟 App 版本一樣（' + ver + '），更新紀錄最上面是這一版', N.NEWS && N.NEWS.ver === ver && N.NEWS.log[0].ver === ver);
+  t('公告：每筆更新紀錄都有版號、日期、標題、內容', N.NEWS.log.every((v) => v.ver && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.title && v.items.length));
+  t('公告：開發中不寫日期', !/\d{4}[-\/年]|\d+\s*月/.test(JSON.stringify(N.NEWS.soon)));
+  t('公告：studio-news.js 跟共用版一樣', R('studio-news.js') === R('../../行銷推廣/共用/studio-news.js'));
+  t('公告：打包和離線快取都有放公告檔', /'news\.js', 'studio-news\.js'/.test(R('scripts/build.js')) && /'news\.js', 'studio-news\.js'/.test(R('sw.js')));
+  t('公告：index.html 有載入公告、app.js 有啟動公告', /<script src="news\.js"><\/script>\s*<script src="studio-news\.js"><\/script>/.test(R('index.html')) && /STUDIO_NEWS\.init\(\{\s*game: 'gushi'/.test(R('app.js')));
+}
+
 // ── 積分 ──
 let s = C.newState(T0);
 t('新手送點', s.pts === C.ECON.START);

@@ -4,6 +4,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const KEY = 'gushi-v1';
   const DEV = /[?&]dev\b/.test(location.search);
+  const hadSave = (() => { try { return !!localStorage.getItem(KEY); } catch { return false; } })();
   let S = Core.load((() => { try { return localStorage.getItem(KEY); } catch { return null; } })());
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
   save();
@@ -94,8 +95,9 @@
     $('#top').innerHTML = (opts.back ? '<button class="back" onclick="history.length>1?history.back():location.hash=\'#home\'">‹</button>' : '')
       + (opts.title ? `<span class="brand">${esc(opts.title)}</span>` : '<span class="brand">股市<i>白話通</i></span>')
       + (d ? `<span class="date" id="dtag">${d} 收盤</span>` : '')
-      + `<a class="tb-ic" href="#search" aria-label="查詢股票" style="margin-left:auto">🔍</a><a class="pts" href="#me" id="pts" style="margin-left:4px"><span class="coin">點</span><span class="num" data-v="${S.pts}">${S.pts}</span></a>`;
+      + `<a class="tb-ic" href="#search" aria-label="查詢股票" style="margin-left:auto">🔍</a><button class="tb-ic" id="newsBtn" aria-label="公告">📢</button><a class="pts" href="#me" id="pts" style="margin-left:4px"><span class="coin">點</span><span class="num" data-v="${S.pts}">${S.pts}</span></a>`;
     // 頂部背景跟著大盤紅綠（勾選連動：狀態一變，整個畫面跟著變）
+    if (window.STUDIO_NEWS) STUDIO_NEWS.refresh();
     if (M?.index?.[0]) document.body.dataset.mkt = M.index[0].chg > 0 ? 'up' : M.index[0].chg < 0 ? 'down' : 'flat';
   }
   // 點數變動：數字滾動＋跳一下；加點時從點數徽章噴金幣
@@ -706,4 +708,12 @@
   Ads.preload();
   if ('serviceWorker' in navigator && /^https?:/.test(location.protocol) && !Ads.isNative()) navigator.serviceWorker.register('sw.js').catch(() => {});
   window.__app = { get S() { return S; }, get M() { return M; }, Core };
+  // 公告（studio-news.js 共用，內容在 news.js）
+  if (window.STUDIO_NEWS) STUDIO_NEWS.init({
+    game: 'gushi', button: '#newsBtn',
+    isNewPlayer: () => !hadSave,
+    canPop: () => /^(#home)?$/.test(location.hash) && !document.querySelector('.inter'),
+    stats: () => (M ? [['資料日期', M.date + ' 收盤'], ['股票／ETF', M.rows.length.toLocaleString() + ' 檔']] : []),
+    theme: { bg: '#0b1020', card: '#121a2e', accent: '#ffc85b', text: '#eef2ff', sub: '#9aa6c8' },
+  });
 })();
