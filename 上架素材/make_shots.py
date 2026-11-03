@@ -56,33 +56,36 @@ def main():
         def snap(): return p.screenshot()
 
         go('#home', 3500)
-        compose(snap(), '台股今天發生什麼事', '大盤、法人、族群強弱　一眼看懂', '01')
+        compose(snap(), 'AI 盤後日報', '每天收盤後　大盤重點一篇看懂', '01')
+
+        go('#s/2330', 4000)
+        for i in range(2):
+            p.evaluate("() => { const b = document.querySelector('[data-unlock]'); b && b.click(); }")
+            p.wait_for_timeout(6000)
+        p.evaluate("() => { const e = document.querySelector('.aic'); if (e) window.scrollTo(0, Math.max(0, e.getBoundingClientRect().top + scrollY - 200)); }")
+        p.wait_for_timeout(1500)
+        compose(snap(), 'AI 個股報告書', '多空訊號、法人籌碼、AI 結論', '02')
+
+        go('#weekly', 3000)
+        p.evaluate("() => { const b = document.querySelector('[data-unlock]'); b && b.click(); }")
+        p.wait_for_timeout(3000)
+        p.evaluate("() => document.querySelectorAll('.toast,.inter,.modal').forEach(e => e.remove())")
+        compose(snap(), '概念股 AI 週報', '每週五出刊　族群這週誰強誰弱', '03')
 
         go('#s/2454', 4000)
         p.evaluate("() => { const b = document.querySelector('[data-unlock]'); b && b.click(); }")
         p.wait_for_timeout(3500)
         p.evaluate("() => { const e = document.querySelector('.explain, [data-k=explain], .lock, .ai'); if (e) window.scrollTo(0, Math.max(0, e.getBoundingClientRect().top + scrollY - 260)); }")
         p.wait_for_timeout(800)
-        compose(snap(), 'AI 白話解說', '這檔股票今天為什麼漲跌？說給你聽', '02')
-
-        go('#s/2330', 4000)
-        for i in range(2):
-            p.evaluate("() => { const b = document.querySelector('[data-unlock]'); b && b.click(); }")
-            p.wait_for_timeout(6000)
-        p.evaluate("() => { const d = document.querySelector('.deck'); if (d) { d.querySelector('.deck-stack').click(); const h = d.parentElement; window.scrollTo(0, h.getBoundingClientRect().top + scrollY - 70); } }")
-        p.wait_for_timeout(2500)
-        compose(snap(), '深度報告', '多空訊號、法人籌碼、歷史相似情境', '03')
+        compose(snap(), 'AI 白話解說', '這檔股票今天為什麼漲跌？說給你聽', '04')
 
         go('#heat', 3500)
-        compose(snap(), '台股熱力圖', '產業、概念股強弱　一張圖看完', '04')
+        compose(snap(), '台股熱力圖', '產業、概念股強弱　一張圖看完', '05')
 
-        go('#game', 2500)
-        p.evaluate("() => document.querySelector('#go').click()")
-        p.wait_for_timeout(5000)
-        compose(snap(), '歷史盲測', '遮住股名和日期　猜猜之後漲還跌', '05')
-
-        go('#me', 2500)
-        compose(snap(), '看廣告賺點數', '免費解鎖白話解說和深度報告', '06')
+        go('#home', 3500)
+        p.evaluate("() => { const h = [...document.querySelectorAll('.card h3')].find(x => x.textContent.includes('自選股晨報')); if (h) window.scrollTo(0, h.closest('.card').getBoundingClientRect().top + scrollY - 70); }")
+        p.wait_for_timeout(1000)
+        compose(snap(), '自選股晨報', '你的股票今天怎麼了　開 App 就知道', '06')
         b.close()
 
 if __name__ == '__main__':
