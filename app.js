@@ -108,12 +108,15 @@
   };
 
   // ───── 廣告和點數 ─────
-  async function watchAd() {
+  // 按下看廣告後：按鈕變「載入中」（真的廣告載入最久要 20 秒，不能看起來像沒反應）
+  function adBusy(btn) { if (btn) { btn.disabled = true; btn.textContent = '📺 廣告載入中…'; } }
+  async function watchAd(btn, quiet) {
     if (Core.adsLeft(S) <= 0) { toast('今天的廣告次數用完了，明天再來'); return 'cap'; }
+    adBusy(btn);
     const r = await Ads.rewarded('points');
     if (r === 'completed') { Core.grantAd(S); save(); bump(); toast(`+${Core.ECON.AD_REWARD} 點`); }
     else if (r === 'skipped') { S.stats.adsSkip++; S.lastReward = Date.now(); save(); toast('沒看完，沒有拿到點數'); }
-    else if (r !== 'busy') { S.stats.adsNofill++; save(); }
+    else if (r !== 'busy') { S.stats.adsNofill++; save(); if (!quiet) toast('現在沒有廣告可以播，等一下再試試'); }
     return r;
   }
   // 點數不夠時：看廣告補點，補夠了自動解鎖
@@ -137,7 +140,7 @@
       if (a === 'x') return el.remove();
       if (a === 'ci') { Core.checkin(S); save(); bump(); }
       if (a === 'ad') {
-        const r = await watchAd();
+        const r = await watchAd(e.target.closest('button'), true);
         if (r === 'nofill' || r === 'error') {
           const f = Core.unlockFree(S, code, kind, M.date); save();
           if (f.ok) { el.remove(); toast('廣告暫時播不出來，這次免費'); return onDone(); }
@@ -555,6 +558,7 @@
     G.err = '';
     const go = $('#go'); if (go) go.onclick = newRound;
     const more = $('#more'); if (more) more.onclick = async () => {
+      adBusy(more);
       const r = await Ads.rewarded('game');
       if (r === 'completed' || r === 'nofill' || r === 'error') { Core.gameAdBonus(S); save(); toast(r === 'completed' ? `多 ${Core.ECON.GAME_AD_BONUS} 題` : '廣告播不出來，這次直接送你'); }
       V.game();
@@ -606,7 +610,7 @@
         <p class="small mute" style="margin-top:8px">廣告看完 ${S.stats.adsDone}・中途關掉 ${S.stats.adsSkip}・沒廣告 ${S.stats.adsNofill}・插頁 ${S.stats.inter}・花掉 ${S.stats.spent} 點・查詢 ${S.opens} 次</p></div>` : ''}
       <div class="card"><h3>關於</h3><p class="small sub">股市白話通用白話告訴你股票今天為什麼漲跌。資料每個交易日收盤後更新${M ? `，目前是 ${M.date} 的資料` : ''}。</p>${disclaimer}</div>`;
     FX.count($('#wp'), S.pts, { dur: 800 }); walletShown = S.pts;
-    $('#ad').onclick = async () => { await watchAd(); V.me(); };
+    $('#ad').onclick = async (e) => { await watchAd(e.currentTarget); V.me(); };
     $('#ci').onclick = () => { const r = Core.checkin(S); save(); if (r.ok) { bump(); toast(`+${r.got} 點`); } V.me(); };
     if (DEV) {
       $('#am').onchange = (e) => Ads.setMode(e.target.value);
