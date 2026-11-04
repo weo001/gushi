@@ -404,13 +404,16 @@
     else if (grp) pool = grp.codes.map((c) => byCode.get(c)).filter(Boolean);
     else { HM.scope = 'all'; return V.heat(); }
     // ETF 沒有市值，ETF 群組和自選裡的 ETF 一律用成交值
+    const mv = HM.size === 'mv'; // 漲跌＝漲跌越多方塊越大（跌最多的最大），一眼看出今天誰動最大
     const sizeKey = HM.size !== 'val' && pool.some((s) => s.cap > 0) && !(grp && grp.id === 'etf') ? 'cap' : 'val';
     const fv = (s) => ((s.f || 0) * s.close) / 1e5; // 外資買賣超金額（億）
     // 平均＝每檔一樣大（先照市值挑出要畫的股票），看得到整個市場的漲跌分布，不會被台積電蓋掉
     const eq = HM.size === 'eq';
-    let items = pool.map((s) => ({ s, v: s[sizeKey] > 0 ? s[sizeKey] : 0 })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
+    let items = mv
+      ? pool.filter((s) => s.val >= 0.1 && Number.isFinite(s.pct)).map((s) => ({ s, v: Math.abs(s.pct) + 0.15 })).sort((a, b) => b.v - a.v) // 太冷門（成交值不到 1000 萬）的不畫
+      : pool.map((s) => ({ s, v: s[sizeKey] > 0 ? s[sizeKey] : 0 })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
     const shownAll = items.length;
-    if (isAll) items = items.slice(0, eq ? 300 : 400);
+    if (isAll) items = items.slice(0, eq || mv ? 300 : 400);
     if (eq) items = items.map((x) => ({ s: x.s, v: 1 }));
     const fScale = (() => { const a = items.map((x) => Math.abs(fv(x.s))).sort((p, q) => p - q); return a[Math.floor(a.length * 0.9)] || 1; })();
     const liveTiles = !isAll && HM.color === 'pct' && items.length <= 150;
@@ -429,28 +432,28 @@
       let k = 0;
       for (const r of Core.squarify(inds, 0, 0, W, H)) {
         const hd = r.w > 54 && r.h > 40 ? 16 : 0;
-        const avg = r.arr.reduce((a, b) => a + b.s.pct * b.v, 0) / r.v; // 依大小加權的平均漲跌
+        const avg = mv ? r.arr.reduce((a, b) => a + b.s.pct, 0) / r.arr.length : r.arr.reduce((a, b) => a + b.s.pct * b.v, 0) / r.v; // 依大小加權的平均漲跌（漲跌模式用簡單平均）
         html += `<div class="hm-ind" style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px">${hd ? `<button class="hm-hd" data-ind="${esc(r.ind)}"><span>${esc(r.ind)}</span><b class="${cls(avg)}">${fp(avg, 1)}</b> ›</button>` : ''}</div>`;
         for (const t of Core.squarify(r.arr, r.x + 1, r.y + hd + 1, r.w - 2, r.h - hd - 2)) html += tile(t, k++);
       }
     } else Core.squarify(items, 0, 0, W, H).forEach((t, k) => { html += tile(t, k); });
     const ups = items.filter((x) => x.s.pct > 0).length, dns = items.filter((x) => x.s.pct < 0).length;
-    const wavg = items.reduce((a, b) => a + b.s.pct * b.v, 0) / (items.reduce((a, b) => a + b.v, 0) || 1);
+    const wavg = mv ? items.reduce((a, b) => a + b.s.pct, 0) / (items.length || 1) : items.reduce((a, b) => a + b.s.pct * b.v, 0) / (items.reduce((a, b) => a + b.v, 0) || 1);
     const chip = (id, name) => `<button class="chip ${sc === id ? 'on' : ''}" data-sc="${id}">${name}</button>`;
     const inds = [...new Set(stocksOnly().map((s) => s.ind))].filter((x) => x !== '其他').sort((a, b) => a.localeCompare(b, 'zh-Hant'));
     const title = isAll ? '全市場（照產業分區）' : indName ? `產業：${indName}` : sc === 'watch' ? '⭐ 我的自選' : grp.name;
     $('#view').innerHTML = `
       <div class="hm-chips">${chip('all', '全市場')}${chip('watch', '⭐ 自選')}${Core.GROUPS.map((g) => chip('grp:' + g.id, g.name)).join('')}</div>
       <div class="row" style="gap:6px;margin:10px 0 8px;flex-wrap:wrap">
-        <div class="seg" id="sz"><button data-v="cap" class="${HM.size === 'cap' ? 'on' : ''}">市值</button><button data-v="val" class="${HM.size === 'val' ? 'on' : ''}">成交值</button><button data-v="eq" class="${eq ? 'on' : ''}">平均</button></div>
+        <div class="seg" id="sz"><button data-v="cap" class="${HM.size === 'cap' ? 'on' : ''}">市值</button><button data-v="val" class="${HM.size === 'val' ? 'on' : ''}">成交值</button><button data-v="eq" class="${eq ? 'on' : ''}">平均</button><button data-v="mv" class="${mv ? 'on' : ''}">漲跌</button></div>
         <div class="seg" id="co"><button data-v="pct" class="${HM.color === 'pct' ? 'on' : ''}">漲跌幅</button><button data-v="f" class="${HM.color === 'f' ? 'on' : ''}">外資</button></div>
         <select id="indSel" class="seg-sel"><option value="">選產業…</option>${inds.map((i) => `<option ${indName === i ? 'selected' : ''}>${esc(i)}</option>`).join('')}</select>
       </div>
       <div class="row small" style="margin-bottom:6px"><b>${esc(title)}</b>${!isAll ? '<button class="chip" data-sc="all" style="padding:1px 8px">‹ 回全市場</button>' : ''}
-        <span class="mute" style="margin-left:auto">${items.length} 檔・<span class="up">漲 ${ups}</span>・<span class="down">跌 ${dns}</span>・${HM.color === 'f' ? '' : (eq ? '平均 ' : '加權 ') + fp(wavg)}</span></div>
+        <span class="mute" style="margin-left:auto">${items.length} 檔・<span class="up">漲 ${ups}</span>・<span class="down">跌 ${dns}</span>・${HM.color === 'f' ? '' : (eq || mv ? '平均 ' : '加權 ') + fp(wavg)}</span></div>
       ${items.length ? `<div class="hm" id="hm" style="height:${H}px">${html}</div>` : `<div class="card empty">${sc === 'watch' ? '自選股還是空的，先到個股頁按 ☆ 加進來。' : '這裡沒有資料'}</div>`}
       <div class="hm-legend"><span>${HM.color === 'f' ? '外資賣' : '-6%'}</span><i></i><span>${HM.color === 'f' ? '外資買' : '+6%'}</span></div>
-      <p class="disc">方塊大小＝${eq ? '每檔一樣大' : sizeKey === 'cap' ? '市值' : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}${Live.enabled() ? (liveTiles ? '盤中每 5 秒更新漲跌（證交所報價）。' : isAll ? '全市場是收盤資料；自選、概念股、單一產業盤中會即時更新。' : '') : ''}點方塊看重點。</p>
+      <p class="disc">方塊大小＝${mv ? '今天漲跌的幅度（漲最多、跌最多的最大）' : eq ? '每檔一樣大' : sizeKey === 'cap' ? '市值' : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${mv ? '漲跌幅度' : sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}${Live.enabled() ? (liveTiles ? '盤中每 5 秒更新漲跌（證交所報價）。' : isAll ? '全市場是收盤資料；自選、概念股、單一產業盤中會即時更新。' : '') : ''}點方塊看重點。</p>
       ${!isAll && items.length ? `<div class="card"><h3>漲跌排行</h3>${listHtml(items.map((x) => x.s).sort((a, b) => b.pct - a.pct))}</div>` : ''}`;
     if (hmTap) { FX.circle($('#hm'), hmTap.x, hmTap.y); hmTap = null; }
     const go = (scope, e) => { HM.scope = scope; hmSave(); if (e) hmTap = { x: e.clientX, y: e.clientY }; FX.haptic(5); V.heat(); window.scrollTo({ top: 0 }); };
