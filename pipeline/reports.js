@@ -16,7 +16,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── 1. 盤後日報 ──
 async function daily({ date, market, stocks, explain, groq, log }) {
   const old = read('daily.json', {});
-  if (old.date === date && old.ai) { log('盤後日報：今天已經有 AI 版'); return; }
+  if (old.date === date && old.ai && old.src === 'open') { log('盤後日報：今天已經有 AI 版'); return; }
   const fp = (p) => Core.fmtPct(p);
   const ix = market.index || [];
   const byVal = [...stocks].sort((a, b) => b.val - a.val);
@@ -40,7 +40,7 @@ async function daily({ date, market, stocks, explain, groq, log }) {
   };
   let out = null;
   if (groq) { const t = await groq(Core.dailyPrompt(f), 900); out = Core.parseDaily(t); if (!out && t) log('  日報 AI 不合格：', t.slice(0, 80)); }
-  write('daily.json', { date, ai: !!out, ...(out || rule), hot: hot.map((s) => s.c), focus: notes.length ? [...new Map([...hot, ...movers].map((s) => [s.c, s])).values()].filter((s) => ex[s.c]?.ai).slice(0, 6).map((s) => s.c) : [] });
+  write('daily.json', { date, src: 'open', ai: !!out, ...(out || rule), hot: hot.map((s) => s.c), focus: notes.length ? [...new Map([...hot, ...movers].map((s) => [s.c, s])).values()].filter((s) => ex[s.c]?.ai).slice(0, 6).map((s) => s.c) : [] });
   log('盤後日報：', out ? 'AI' : '規則版', (out || rule).title);
 }
 
@@ -78,13 +78,16 @@ async function weekly({ date, all, explain, groq, log, hist: H }) {
   const last = H.slice(-12), hist = { dates: last.map(([d]) => d), c: {} };
   for (const code of codes) hist.c[code] = last.map(([, x]) => (x.L?.[code] || x.O?.[code])?.[1] ?? null);
   write('hist.json', hist);
-  if (hist.dates.length < 6) { log(`概念股週報：歷史只有 ${hist.dates.length} 天，累積到 6 天以上才寫`); return calls; }
+  if (hist.dates.length < 6) {
+    if (read('weekly.json', {}).src !== 'open') write('weekly.json', { src: 'open', groups: [] }); // 舊版（FinMind 時期）的週報不留
+    log(`概念股週報：歷史只有 ${hist.dates.length} 天，累積到 6 天以上才寫`); return calls;
+  }
 
   // 週報：資料日是星期五，或週報超過 8 天沒更新
   const wk = Core.weekKey(date), old = read('weekly.json', {});
   const friday = new Date(Date.parse(date)).getUTCDay() === 5;
-  if (old.week === wk && old.date === date && old.ai) { log('概念股週報：這週已經有了'); return calls; }
-  if (!friday && old.date && old.date >= addDays(date, -8)) { log('概念股週報：星期五才寫'); return calls; }
+  if (old.week === wk && old.date === date && old.ai && old.src === 'open') { log('概念股週報：這週已經有了'); return calls; }
+  if (!friday && old.src === 'open' && old.date && old.date >= addDays(date, -8)) { log('概念股週報：星期五才寫'); return calls; }
   const names = Object.fromEntries(Object.values(all).map((s) => [s.c, s.n]));
   const ex = explain.items || {};
   const groups = [];
@@ -99,7 +102,7 @@ async function weekly({ date, all, explain, groq, log, hist: H }) {
   }
   groups.sort((a, b) => b.pct5 - a.pct5);
   const sum = groups.length ? `這週最強的族群是${groups[0].name}（${Core.fmtPct(groups[0].pct5)}），最弱的是${groups[groups.length - 1].name}（${Core.fmtPct(groups[groups.length - 1].pct5)}）。` : '';
-  write('weekly.json', { week: wk, date, ai: aiN > 0, summary: sum, groups });
+  write('weekly.json', { week: wk, date, src: 'open', ai: aiN > 0, summary: sum, groups });
   log(`概念股週報 ${wk}：${groups.length} 個族群（AI ${aiN}）`);
   return calls;
 }
