@@ -92,7 +92,7 @@ async function fetchAll() {
   });
   // 上櫃行情
   await safe('上櫃行情', async () => {
-    const a = await get(`${TP}/tpex_mainboard_daily_close_quotes`);
+    const a = await get(`${TP}/tpex_mainboard_daily_close_quotes`, { tries: 6 }); // 1 萬多筆，偶爾會斷線
     const date = ad(a[0]?.Date), O = {};
     for (const r of a) { const c = String(r.SecuritiesCompanyCode).trim(); if (!keep(c)) continue; const close = n(r.Close), chg = n(r.Change); if (!(close > 0) || !Number.isFinite(chg)) continue;
       O[c] = [String(r.CompanyName).trim(), close, chg, n(r.TradingShares), n(r.TransactionAmount), n(r.High) || close, n(r.Low) || close, null, null, null]; }
