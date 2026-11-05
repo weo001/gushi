@@ -1,58 +1,13 @@
-# 美股、陸股：收盤後自動更新資料（GitHub Actions，公開儲存庫免費）
-#   陸股：台灣 17:40（陸股 15:00 收盤，BaoStock 約 17:00 後有當天資料）
-#   美股：台灣 06:30（美股收盤＝台灣 05:00，夏令 04:00）。cron 用 UTC：22:30 UTC 週一～五＝台灣週二～六 06:30
-# 快取（每天的 K 棒、2 年日 K）用 actions/cache 保存，第一次之後每天只補 1 天
-name: 美股陸股每日更新
+# 美股、陸股：【已暫停】資料授權沒有確認，不能公開提供（2026-11-05）
+#   美股 Massive 免費方案：只限個人、非商業使用，不能提供給第三人（Individuals Terms §2、§6.1(f)(ix)、§7）
+#   陸股 BaoStock：沒有公開的資料使用條款，原始資料權利屬上交所／深交所，商業轉發通常要授權
+# 程式保留，只能在本機個人使用：更新資料.cmd 或 node pipeline/cn.js、node pipeline/us.js
+# 之後取得書面授權（或找到明確允許免費商業使用的來源）再恢復排程和 data/us、data/cn
+name: 美股陸股（已暫停）
 on:
-  schedule:
-    - cron: '40 9 * * 1-5'
-    - cron: '30 22 * * 1-5'
-  workflow_dispatch:
-    inputs:
-      market: { description: 'cn 或 us（空白＝看時間）', required: false, default: '' }
-permissions:
-  contents: write
-concurrency: { group: global-data, cancel-in-progress: false }
+  workflow_dispatch: {}
 jobs:
-  build:
+  paused:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm ci --ignore-scripts
-      - name: 決定這次跑哪個市場
-        id: m
-        run: |
-          M="${{ github.event.inputs.market }}"
-          if [ -z "$M" ]; then H=$(date -u +%H); if [ "$H" -ge 20 ] || [ "$H" -lt 3 ]; then M=us; else M=cn; fi; fi
-          echo "market=$M" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: |
-            pipeline/cache/cn_raw.json
-            pipeline/cache/us_days
-            pipeline/cache/us_k
-            pipeline/cache/us_universe.json
-          key: global-${{ steps.m.outputs.market }}-${{ github.run_id }}
-          restore-keys: global-${{ steps.m.outputs.market }}-
-      - if: steps.m.outputs.market == 'cn'
-        uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
-      - name: 陸股
-        if: steps.m.outputs.market == 'cn'
-        env: { GROQ_API_KEY: '${{ secrets.GROQ_API_KEY }}', PYTHONIOENCODING: utf-8 }
-        run: pip install baostock && python pipeline/cn_fetch.py && node pipeline/cn.js
-      - name: 美股
-        if: steps.m.outputs.market == 'us'
-        env: { GROQ_API_KEY: '${{ secrets.GROQ_API_KEY }}', MASSIVE_API_KEY: '${{ secrets.MASSIVE_API_KEY }}' }
-        run: |
-          if [ -z "$MASSIVE_API_KEY" ]; then echo "還沒有設定 MASSIVE_API_KEY，這次不更新美股"; exit 0; fi
-          node pipeline/us.js
-      - name: 存回儲存庫（GitHub Pages 會自動更新網站）
-        run: |
-          git config user.name "daily-bot"
-          git config user.email "daily-bot@users.noreply.github.com"
-          git add data
-          git diff --cached --quiet || (git commit -m "${{ steps.m.outputs.market }} 資料更新 $(date -u +%F)" && git pull --rebase && git push)
+      - run: echo "美股、陸股資料授權未確認，已暫停公開更新。說明在 README.md。"

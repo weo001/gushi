@@ -9,3 +9,7 @@ ios/App/output/
 *.ipa
 .DS_Store
 上架素材/影片/*.mp4
+
+# 美股、陸股資料：授權未確認，不公開（只在本機個人使用）
+data/us/
+data/cn/
