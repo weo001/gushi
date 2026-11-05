@@ -158,8 +158,9 @@
     const out = [], tags = [];
     const p = x.pct;
     if (!isFinite(p)) return { text: `${x.name}今天沒有成交資料。`, tags: [] };
-    const lim = Math.abs(p) >= 9.5;
-    out.push(`${x.name}今天${p === 0 ? '平盤' : (lim ? (p > 0 ? '漲停' : '跌停') : upDown(p) + ' ' + Math.abs(p).toFixed(2) + '%')}，收 ${x.close} 元。`);
+    // 漲跌停：台股 10%、陸股主板 10%／創業板科創板 20%／ST 5%；美股沒有（limit＝Infinity）
+    const lim = Math.abs(p) >= (x.limit || 10) * 0.95;
+    out.push(`${x.name}今天${p === 0 ? '平盤' : (lim ? (p > 0 ? '漲停' : '跌停') : upDown(p) + ' ' + Math.abs(p).toFixed(2) + '%')}，收 ${x.close} ${x.cur || '元'}。`);
     if (lim) tags.push(p > 0 ? '漲停' : '跌停');
 
     // 跟大盤、跟族群比
@@ -203,6 +204,7 @@
 
   // 給 AI 的提示詞（每日資料程式用）
   C.aiPrompt = (x) => {
+    if (x.mkt && x.mkt !== 'tw') return C.aiPromptG(x);
     const lines = [
       `股票：${x.name}（${x.code}），產業：${x.ind || '未知'}`,
       `今日收盤：${x.close} 元，漲跌 ${C.fmtPct(x.pct)}`,
@@ -230,6 +232,8 @@
     t = t.trim();
     if (t.length < min || t.length > max) return false;
     if (/(建議|可以考慮|適合)(買進|進場|布局|加碼|賣出|減碼)|目標價|逢低買|逢高賣/.test(t)) return false;
+    if (/可推測|暗示市場|推測是/.test(t)) return false; // 資料沒有的原因不准猜
+    if (/(回升|上漲|上攻|反彈)空間|有望(上漲|回升|反彈|走高)/.test(t)) return false; // 不准預測會漲
     const simp = (t.match(/[这们说为时会来对个发经过还进间们后]/g) || []).length;
     return simp <= 2;
   };
@@ -237,8 +241,8 @@
   // ───────────── 3b. 盤後 AI 報告（伺服器每天產生）─────────────
   const RULES = '只能根據使用者提供的資料寫，資料裡沒有的事情不准猜、不准編造新聞或數字，數字照資料寫。不可以給任何買進、賣出、目標價、會漲會跌的預測或建議。用繁體中文（台灣用語），對象是投資新手，不要用條列、不要用 markdown。';
   // 個股報告書的「AI 結論」：讀規則版分析的結果，寫成一段有重點的總結
-  C.reportPrompt = (name, code, R) => ({
-    system: '你是台股研究助理，幫新手把一份分析資料整理成「結論」。寫 3 到 5 句、220 字以內：先講整體資料偏多還是偏空（照資料的訊號數），再挑最重要的 2 到 3 個重點，最後講最需要注意的風險。' + RULES,
+  C.reportPrompt = (name, code, R, mkt) => ({
+    system: `你是${mkt && mkt !== 'tw' ? C.MARKETS[mkt].name : '台股'}研究助理，幫新手把一份分析資料整理成「結論」。寫 3 到 5 句、220 字以內：先講整體資料偏多還是偏空（照資料的訊號數），再挑最重要的 2 到 3 個重點，最後講最需要注意的風險。` + RULES,
     user: [`股票：${name}（${code}），資料日期 ${R.date}`, `整體：${R.summary}（偏多訊號 ${R.bull} 個、偏空訊號 ${R.bear} 個）`,
       ...R.sections.map((x) => `【${x.title}】${x.lines.join(' ')}`), `【風險】${R.risks.join(' ')}`].join('\n'),
   });
@@ -285,6 +289,7 @@
   // 回傳 { summary, bull, bear, sections:[{icon,title,lines,tone}], risks:[], similar }
   C.analyze = (raw) => {
     const P = (raw.prices || []).filter((r) => r.close > 0);
+    const cur = raw.cur || '元', vfmt = raw.volFmt || ((v) => C.fmtLots(v / 1000)); // 台股用「張」，陸股、美股用「股」
     if (P.length < 30) return { error: '歷史資料不足（上市未滿 30 個交易日）' };
     const close = P.map((r) => r.close), n = close.length, last = P[n - 1], c = last.close;
     const sections = [], risks = [];
@@ -299,7 +304,7 @@
     const r5 = ret(5), r20 = ret(20), r60 = ret(60), r240 = ret(240);
     const L = [];
     L.push(`近 1 週 ${C.fmtPct(r5, 1)}、近 1 月 ${C.fmtPct(r20, 1)}、近 3 月 ${C.fmtPct(r60, 1)}${isFinite(r240) ? '、近 1 年 ' + C.fmtPct(r240, 1) : ''}。`);
-    L.push(`在過去一年的高低區間（${px(lo)}～${px(hi)} 元）裡，現在位於 ${Math.round(pos * 100)}% 的位置${pos >= 0.9 ? '，接近一年高點' : pos <= 0.1 ? '，接近一年低點' : ''}。`);
+    L.push(`在過去一年的高低區間（${px(lo)}～${px(hi)} ${cur}）裡，現在位於 ${Math.round(pos * 100)}% 的位置${pos >= 0.9 ? '，接近一年高點' : pos <= 0.1 ? '，接近一年低點' : ''}。`);
     const above = (m) => (isFinite(m) ? (c >= m ? '之上' : '之下') : null);
     const mas = [['月線（20 日）', ma20], ['季線（60 日）', ma60], ['年線（240 日）', ma240]].filter(([, m]) => isFinite(m));
     L.push('股價在' + mas.map(([k, m]) => `${k}${above(m)}`).join('、') + '。');
@@ -314,7 +319,7 @@
     // 成交量
     const vol = P.map((r) => r.Trading_Volume || 0);
     const v20 = C.sma(vol, 20, n - 1), vr = v20 ? vol[n - 1] / v20 : NaN;
-    if (isFinite(vr)) sections.push({ icon: '📊', title: '成交量', tone: 0, lines: [`最近一天成交 ${C.fmtLots(vol[n - 1] / 1000)}，是前 20 天平均的 ${r1(vr)} 倍${vr >= 2 ? '（爆量）' : vr < 0.6 ? '（量縮）' : ''}。`] });
+    if (isFinite(vr)) sections.push({ icon: '📊', title: '成交量', tone: 0, lines: [`最近一天成交 ${vfmt(vol[n - 1])}，是前 20 天平均的 ${r1(vr)} 倍${vr >= 2 ? '（爆量）' : vr < 0.6 ? '（量縮）' : ''}。`] });
 
     // 三大法人
     const inst = raw.inst || [];
@@ -378,7 +383,7 @@
     if (pe.length >= 20) {
       const now = pe[pe.length - 1], arr = pe.map((r) => r.PER).sort((a, b) => a - b);
       const rank = arr.filter((x) => x <= now.PER).length / arr.length;
-      const LL = [`本益比 ${now.PER} 倍、股價淨值比 ${now.PBR} 倍、殖利率 ${now.dividend_yield}%。`,
+      const LL = [`本益比 ${now.PER} 倍${now.PBR != null ? `、股價淨值比 ${now.PBR} 倍` : ''}${now.dividend_yield != null ? `、殖利率 ${now.dividend_yield}%` : ''}。`,
         `本益比在自己過去一年的區間（${arr[0]}～${arr[arr.length - 1]} 倍）中位於 ${Math.round(rank * 100)}% 的位置${rank >= 0.9 ? '，比過去一年大部分時候都貴' : rank <= 0.1 ? '，比過去一年大部分時候都便宜' : ''}。`];
       if (rank >= 0.9) risks.push('本益比接近一年最高，市場已經給了比較高的期待。');
       sections.push({ icon: '🏷️', title: '評價（貴不貴）', lines: LL, tone: rank >= 0.9 ? -1 : rank <= 0.2 ? 1 : 0 });
@@ -420,6 +425,111 @@
       best: Math.max(...outs), worst: Math.min(...outs), years: Math.max(1, Math.round(n / 245)), dates: pick.map((p) => P[p.i].date),
     };
   };
+
+  // ───────────── 4b. 多市場：台股、美股、陸股 ─────────────
+  // 三個市場都是「盤後」：收盤後伺服器統一抓資料、寫 AI 報告；App 上寫清楚各市場幾點收盤（換成台灣時間）
+  C.MARKETS = {
+    tw: { id: 'tw', name: '台股', flag: '🇹🇼', cur: '元', idxName: '加權指數', limit: 10, src: '臺灣證券交易所、證券櫃檯買賣中心、FinMind' },
+    us: { id: 'us', name: '美股', flag: '🇺🇸', cur: '美元', idxName: 'S&P 500', limit: Infinity, newsEn: true, valUnit: '億美元', capUnit: '億美元', src: 'Massive（Polygon.io）' },
+    cn: { id: 'cn', name: '陸股', flag: '🇨🇳', cur: '人民幣', idxName: '上證指數', limit: 10, valUnit: '億人民幣', capUnit: '億人民幣', src: 'BaoStock（證券寶）' },
+  };
+  C.MKT_IDS = ['tw', 'us', 'cn'];
+  // 陸股漲跌停：主板 10%、創業板（300/301）和科創板（688）20%、ST 股 5%
+  C.cnLimit = (code, name) => (/ST/.test(name || '') ? 5 : /^(30|688)/.test(code) ? 20 : 10);
+  // 美國夏令時間：3 月第二個星期日 ～ 11 月第一個星期日（用美東日期判斷）
+  C.usDST = (date) => {
+    const [y, m, d] = date.split('-').map(Number);
+    const sun = (mon, k) => { const w = new Date(Date.UTC(y, mon - 1, 1)).getUTCDay(); return 1 + ((7 - w) % 7) + (k - 1) * 7; };
+    if (m > 3 && m < 11) return true;
+    if (m === 3) return d >= sun(3, 2);
+    if (m === 11) return d < sun(11, 1);
+    return false;
+  };
+  // 美東現在的日期（先用冬令 -5 小時算日期，再看那天是不是夏令）
+  C.nyDate = (now = Date.now()) => { const d0 = new Date(now - 5 * 3600e3).toISOString().slice(0, 10); return new Date(now - (C.usDST(d0) ? 4 : 5) * 3600e3).toISOString().slice(0, 10); };
+  // 收盤時間說明（台灣時間）：short＝頂部的一小段字，lines＝首頁說明卡
+  C.closeInfo = (mkt, now = Date.now()) => {
+    if (mkt === 'us') {
+      const dst = C.usDST(C.nyDate(now)), close = dst ? '04:00' : '05:00', open = dst ? '21:30' : '22:30';
+      return {
+        short: `台灣 ${close} 收盤`, dst,
+        title: `美股收盤＝台灣清晨 ${close}`,
+        lines: [`美股（紐約證交所、那斯達克）美東時間 09:30 開盤、16:00 收盤。`,
+          `現在是美國${dst ? '夏令' : '冬令'}時間：台灣晚上 ${open} 開盤、隔天清晨 ${close} 收盤。`,
+          `夏令時間（3 月第二個週日～11 月第一個週日）收盤是台灣 04:00，冬令時間是 05:00。`,
+          `本 App 約台灣早上 06:30 更新，所以台灣白天看到的是「前一晚」的美股。`],
+      };
+    }
+    if (mkt === 'cn') return {
+      short: '台灣 15:00 收盤', title: '陸股收盤＝台灣 15:00',
+      lines: ['陸股（上海、深圳交易所）09:30 開盤、15:00 收盤，中午 11:30～13:00 休息。', '北京時間和台灣時間一樣，不用換算。', '本 App 收盤後約台灣 17:30 更新。'],
+    };
+    return {
+      short: '台灣 13:30 收盤', title: '台股收盤＝台灣 13:30',
+      lines: ['台股（證交所、櫃買中心）09:00 開盤、13:30 收盤。', '三大法人買賣超約 16:00 後才公布，所以本 App 約 17:30 更新、20:30 再補一次。'],
+    };
+  };
+  // 資料日期的說法：美股是「美東 11/04 收盤（台灣 11/05 清晨）」
+  C.dateLabel = (mkt, date) => {
+    if (!date) return '';
+    const md = (d) => d.slice(5).replace('-', '/');
+    if (mkt === 'us') return `美東 ${md(date)} 收盤（台灣 ${md(new Date(Date.parse(date) + 864e5).toISOString().slice(0, 10))} 清晨）`;
+    return `${md(date)} 收盤`;
+  };
+
+  // 美股、陸股的白話解說提示詞（沒有三大法人，改給近 5／20 日漲跌）
+  C.aiPromptG = (x) => {
+    const g = C.MARKETS[x.mkt];
+    const lines = [
+      `股票：${x.name}（${x.code}），產業：${x.ind || '未知'}`,
+      `今日收盤：${x.close} ${g.cur}，漲跌 ${C.fmtPct(x.pct)}`,
+      `大盤（${g.idxName}）：${C.fmtPct(x.mktPct)}；同產業 ${x.indN || 0} 檔平均：${C.fmtPct(x.indPct)}`,
+      `成交量是近 20 日平均的 ${isFinite(x.volRatio) ? r1(x.volRatio) : '未知'} 倍`,
+      `近 5 個交易日 ${C.fmtPct(x.r5)}、近 20 個交易日 ${C.fmtPct(x.r20)}`,
+      `今天的新聞標題${g.newsEn ? '（英文）' : ''}：` + ((x.news || []).slice(0, 8).map((n, i) => `\n${i + 1}. ${n.title}`).join('') || '無'),
+    ];
+    return {
+      system: `你是${g.name}解說員，對象是台灣的投資新手。只能根據使用者提供的資料解釋這檔股票今天為什麼漲跌，資料裡沒有的事情不准猜、不准編造新聞或數字。先照數字比較：漲跌幅比大盤、比同產業是強還是弱（跌得比較多就是比較弱）。${g.newsEn ? '新聞標題是英文，請用中文講重點，不要直接貼英文句子；只有標題講到這家公司具體發生的事（財報、產品、合約、法規、併購、分析師調整評等…）才拿來說明原因，一般評論文章就不要提。不准用「暗示」「可推測」「可能是因為市場對…」這種猜測。' :'資料沒有新聞，就從大盤、同產業、成交量、近期漲跌來說明，不要提到「沒有新聞」。'}只有在資料完全看不出原因時，才說「從公開資料看不出明確原因」；已經說明原因的話就不要再加這句。數字照資料寫。不可以給任何買進、賣出、目標價或預測建議。用繁體中文（台灣用語），寫 2 到 4 句，總共 150 字以內（一定要短），不要用條列、不要用 markdown。`,
+      user: lines.join('\n'),
+    };
+  };
+  // 美股、陸股的盤後日報
+  C.dailyPromptG = (f) => {
+    const g = C.MARKETS[f.mkt];
+    return {
+      system: `你是${g.name}盤後日報的編輯，幫台灣的投資新手寫${g.name}今天發生了什麼事。第一行寫「標題：」加 18 字以內的標題，下一行開始寫內文 4 到 6 句、300 字以內，依序講主要指數和漲跌家數、強勢和弱勢產業、焦點個股和原因（原因只能用資料裡的個股解說和新聞${g.newsEn ? '；新聞是英文，用中文講重點' : ''}）。內文一定要在 300 字以內。${f.mkt === 'us' ? '指數是用追蹤指數的 ETF 代表，只寫漲跌幅，不要寫點數。' : ''}` + RULES,
+      user: [`日期：${f.date}（${g.name}當地收盤）`, `主要指數：${f.idx}`, `上漲 ${f.up} 家、下跌 ${f.down} 家、平盤 ${f.flat} 家（收錄範圍：${f.scope}）`,
+        `強勢產業：${f.strong}`, `弱勢產業：${f.weak}`, `成交值最大：${f.hot}`,
+        `焦點個股解說：` + (f.notes.map((x, i) => `\n${i + 1}. ${x}`).join('') || '無'), `新聞標題：` + (f.news.map((x, i) => `\n${i + 1}. ${x}`).join('') || '無')].join('\n'),
+    };
+  };
+  // 美股、陸股的概念股群組（熱力圖用；收錄範圍外的代號會自動略過）
+  C.GROUPS_BY = {
+    us: [
+      { id: 'm7', name: '七巨頭', codes: ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA'] },
+      { id: 'aichip', name: 'AI 晶片', codes: ['NVDA', 'AMD', 'AVGO', 'TSM', 'MRVL', 'ARM', 'QCOM', 'INTC', 'MU'] },
+      { id: 'semieq', name: '半導體設備', codes: ['ASML', 'AMAT', 'LRCX', 'KLAC', 'TER'] },
+      { id: 'soft', name: '雲端軟體', codes: ['ORCL', 'CRM', 'NOW', 'ADBE', 'SNOW', 'PLTR', 'CRWD', 'PANW', 'DDOG'] },
+      { id: 'twadr', name: '台灣相關 ADR', codes: ['TSM', 'UMC', 'ASX', 'HIMX', 'CHT', 'SIMO'] },
+      { id: 'china', name: '中概股', codes: ['BABA', 'PDD', 'JD', 'BIDU', 'NIO', 'XPEV', 'LI', 'TCOM', 'BEKE'] },
+      { id: 'crypto', name: '加密貨幣概念', codes: ['COIN', 'MSTR', 'HOOD', 'MARA', 'RIOT'] },
+      { id: 'bank', name: '金融', codes: ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'V', 'MA'] },
+      { id: 'etf', name: '熱門 ETF', codes: ['SPY', 'VOO', 'QQQ', 'DIA', 'IWM', 'SOXX', 'SMH', 'TLT'] },
+    ],
+    cn: [
+      { id: 'liquor', name: '白酒', codes: ['600519', '000858', '000568', '600809', '002304', '000596'] },
+      { id: 'ev', name: '新能源車', codes: ['300750', '002594', '601127', '002460', '002466', '601633', '600104'] },
+      { id: 'semi', name: '半導體', codes: ['688981', '603501', '002371', '688012', '603986', '688256', '600584'] },
+      { id: 'ai', name: 'AI 算力', codes: ['688256', '601138', '300308', '300502', '000977', '603019', '002230'] },
+      { id: 'solar', name: '光伏', codes: ['601012', '600438', '300274', '002129', '688599'] },
+      { id: 'bank', name: '銀行', codes: ['601398', '601288', '601939', '601988', '600036', '601166', '000001'] },
+      { id: 'broker', name: '券商保險', codes: ['600030', '300059', '601688', '601318', '601628'] },
+      { id: 'home', name: '家電消費', codes: ['000333', '000651', '600690', '603288', '600887'] },
+    ],
+  };
+  C.groupsOf = (mkt) => (mkt && mkt !== 'tw' ? C.GROUPS_BY[mkt] || [] : C.GROUPS);
+  // 成交量：美股、陸股用「股」
+  C.fmtShares = (v) => { const a = Math.abs(v || 0); return a >= 1e8 ? r1(a / 1e8) + ' 億股' : a >= 1e4 ? Math.round(a / 1e4).toLocaleString('en-US') + ' 萬股' : Math.round(a).toLocaleString('en-US') + ' 股'; };
 
   // ───────────── 5. 熱力圖 ─────────────
   // Squarified treemap：把一群數值切成「盡量接近正方形」的方塊，面積和數值成正比

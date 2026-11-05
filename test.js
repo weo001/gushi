@@ -157,6 +157,66 @@ t('沒有上一次：用最佳買價', q.price === 2345);
 t('指數（沒有五檔）', L.parse({ c: 't00', d: '20261103', z: '45000.5', y: '44920.14' }).chg === 80.36);
 t('網頁（非本機、非 App）不抓', !L.enabled());
 
+// ── 多市場：美股、陸股 ──
+{
+  const _fs = require('fs'), _p = require('path'), R = (f) => _fs.readFileSync(_p.join(__dirname, f), 'utf8');
+  t('三個市場都有設定', C.MKT_IDS.every((id) => C.MARKETS[id] && C.MARKETS[id].name && C.MARKETS[id].flag && C.MARKETS[id].cur));
+  // 美國夏令時間：2026 年 3/8 開始、11/1 結束
+  t('夏令：3/7 還不是、3/8 開始', !C.usDST('2026-03-07') && C.usDST('2026-03-08'));
+  t('夏令：10/31 還是、11/1 結束', C.usDST('2026-10-31') && !C.usDST('2026-11-01'));
+  t('夏令：7 月是、1 月不是', C.usDST('2026-07-15') && !C.usDST('2026-01-15'));
+  t('美東日期：台灣 11/5 早上 = 美東 11/4 晚上', C.nyDate(Date.parse('2026-11-05T01:00:00Z')) === '2026-11-04');
+  const w = C.closeInfo('us', Date.parse('2026-11-05T02:00:00Z')), s = C.closeInfo('us', Date.parse('2026-07-15T02:00:00Z'));
+  t('美股收盤：冬令台灣 05:00、夏令 04:00', w.short === '台灣 05:00 收盤' && s.short === '台灣 04:00 收盤' && !w.dst && s.dst);
+  t('美股說明有寫美東 16:00 和更新時間', w.lines.some((l) => /16:00/.test(l)) && w.lines.some((l) => /更新/.test(l)));
+  t('陸股收盤：台灣 15:00、說明同時區和午休', C.closeInfo('cn').short === '台灣 15:00 收盤' && /一樣/.test(C.closeInfo('cn').lines.join('')) && /11:30/.test(C.closeInfo('cn').lines.join('')));
+  t('台股收盤：13:30', C.closeInfo('tw').short === '台灣 13:30 收盤');
+  t('美股日期：美東 11/04（台灣 11/05 清晨）', C.dateLabel('us', '2026-11-04') === '美東 11/04 收盤（台灣 11/05 清晨）' && C.dateLabel('cn', '2026-11-05') === '11/05 收盤');
+  t('陸股漲跌停：主板 10、創業板科創板 20、ST 5', C.cnLimit('600519', '貴州茅臺') === 10 && C.cnLimit('300750', '寧德時代') === 20 && C.cnLimit('688981', '中芯國際') === 20 && C.cnLimit('600001', '*ST某某') === 5);
+  // 規則版解說：幣別、漲跌停
+  const us = C.explainRule({ name: '輝達', close: 200, pct: 10.5, cur: '美元', limit: Infinity, mktPct: 1 });
+  t('美股：寫美元、漲 10% 不算漲停', /美元/.test(us.text) && !/漲停/.test(us.text) && !us.tags.includes('漲停'));
+  const cy = C.explainRule({ name: '寧德時代', close: 300, pct: 19.99, cur: '人民幣', limit: 20 });
+  t('陸股創業板：漲 20% 才是漲停', /漲停/.test(cy.text) && /人民幣/.test(cy.text));
+  t('陸股創業板：漲 10% 不是漲停', !/漲停/.test(C.explainRule({ name: 'x', close: 1, pct: 10, cur: '人民幣', limit: 20 }).text));
+  t('台股：漲 9.9% 還是漲停（原本規則不變）', /漲停/.test(C.explainRule({ name: 'x', close: 1, pct: 9.9 }).text) && /元。/.test(C.explainRule({ name: 'x', close: 1, pct: 1 }).text));
+  const pg = C.aiPrompt({ mkt: 'us', name: '輝達', code: 'NVDA', close: 200, pct: 2, mktPct: 1, news: [{ title: 'Nvidia beats' }], r5: 3, r20: 5 });
+  t('美股 AI 提示詞：美股解說員、英文新聞要用中文講、沒有三大法人', /美股解說員/.test(pg.system) && /英文/.test(pg.system) && !/三大法人/.test(pg.user) && /S&P 500/.test(pg.user));
+  const pc = C.aiPrompt({ mkt: 'cn', name: '茅臺', code: '600519', close: 1400, pct: 1, news: [] });
+  t('陸股 AI 提示詞：陸股解說員、不能給建議', /陸股解說員/.test(pc.system) && /不可以給任何買進/.test(pc.system) && /上證指數/.test(pc.user));
+  t('台股 AI 提示詞沒變', /台股解說員/.test(C.aiPrompt({ name: 'x', code: '2330', close: 1, pct: 1 }).system));
+  const dp = C.dailyPromptG({ mkt: 'us', date: '2026-11-04', idx: 'SPY 1', up: 1, down: 2, flat: 0, scope: 'x', strong: 'a', weak: 'b', hot: 'c', notes: [], news: [] });
+  t('美股日報提示詞：標題格式、不能給建議', /標題：/.test(dp.system) && /不可以給任何買進/.test(dp.system) && /美股/.test(dp.system));
+  t('報告書提示詞跟著市場', /陸股研究助理/.test(C.reportPrompt('茅臺', '600519', { date: 'd', summary: 's', bull: 1, bear: 0, sections: [], risks: [] }, 'cn').system) && /台股研究助理/.test(C.reportPrompt('x', '2330', { date: 'd', summary: 's', bull: 1, bear: 0, sections: [], risks: [] }).system));
+  t('概念股群組：美股、陸股各自一套，台股照舊', C.groupsOf('us').some((g) => g.id === 'm7') && C.groupsOf('cn').some((g) => g.id === 'liquor') && C.groupsOf('tw') === C.GROUPS);
+  t('成交量：股', C.fmtShares(123456789) === '1.2 億股' && C.fmtShares(52000) === '5 萬股');
+  // 深度報告：美股陸股用自己的幣別和「股」
+  const P = Array.from({ length: 200 }, (_, i) => ({ date: '2026-' + String(1 + Math.floor(i / 28)).padStart(2, '0') + '-' + String(1 + (i % 28)).padStart(2, '0'), close: 100 + i * 0.3 + Math.sin(i) * 3, Trading_Volume: 1e6 + i * 1000 }));
+  const Ru = C.analyze({ prices: P, cur: '美元', volFmt: C.fmtShares });
+  t('深度報告（美股）：寫美元、股，沒有「張」', /美元/.test(JSON.stringify(Ru.sections)) && /股/.test(JSON.stringify(Ru.sections)) && !/張/.test(JSON.stringify(Ru.sections)) && !JSON.stringify(Ru).includes('NaN'));
+  const Rc = C.analyze({ prices: P, per: P.slice(-60).map((r, i) => ({ date: r.date, PER: 20 + i / 10, PBR: 3 })) });
+  t('深度報告（陸股本益比沒有殖利率）：不會寫 undefined', !/undefined/.test(JSON.stringify(Rc)) && Rc.sections.some((x) => x.title.includes('評價')));
+  // App：有切換按鈕、收盤說明卡、三個市場的資料資料夾
+  const A = R('app.js');
+  t('App：頂部有切換股市按鈕', /id="mktBtn"/.test(A) && /function marketSheet/.test(A) && /function switchMarket/.test(A));
+  t('App：首頁最上面有收盤時間說明', /closeCard\}\$\{dailyCard\}/.test(A) && /Core\.closeInfo\(MK\(\)\)/.test(A));
+  t('App：美股陸股讀 data/us、data/cn', /mkt === 'tw' \? '' : mkt \+ '\/'/.test(A));
+  t('App：盲測只出台股', /await loadMarket\('tw'\)/.test(A));
+  for (const m of ['us', 'cn']) {
+    const f = _p.join(__dirname, 'data', m, 'market.json');
+    if (!_fs.existsSync(f)) { console.log(`（還沒有 data/${m}/，跳過資料檢查）`); continue; }
+    const mk = JSON.parse(R(`data/${m}/market.json`)), ch = JSON.parse(R(`data/${m}/chart.json`)), ex = JSON.parse(R(`data/${m}/explain.json`)), dl = JSON.parse(R(`data/${m}/daily.json`));
+    const rows = mk.rows.map((r) => Object.fromEntries(mk.cols.map((k, i) => [k, r[i]])));
+    t(`${m}：行情至少 300 檔、都有價格和漲跌`, rows.length >= 300 && rows.every((s) => s.close > 0 && Number.isFinite(s.pct)));
+    t(`${m}：名稱都是繁體或英文（沒有常見簡體字）`, !rows.some((s) => /[这们说为时会来对个发经过还进间后银资华东电气药业车贵鸿兴乐]/.test(s.n)));
+    t(`${m}：有指數、漲跌家數、產業排行`, mk.index.length >= 2 && mk.breadth.up + mk.breadth.down > 100 && mk.sectors.length >= 5);
+    t(`${m}：走勢圖每檔都有、長度跟日期一樣`, rows.every((s) => ch.c[s.c] && ch.c[s.c].length === ch.dates.length) && ch.dates.length >= 60);
+    t(`${m}：解說、日報日期跟行情一樣`, ex.date === mk.date && dl.date === mk.date && Object.keys(ex.items).length >= 20);
+    t(`${m}：概念股群組的代號大部分都有收錄`, C.groupsOf(m).every((g) => g.codes.filter((c) => rows.some((s) => s.c === c)).length >= Math.ceil(g.codes.length * 0.6)));
+    t(`${m}：AI 文字沒有建議字眼`, Object.values(ex.items).every((x) => !x.ai || C.aiOk(x.t)) && (!dl.ai || C.aiOk(dl.text, 420, 80)));
+  }
+}
+
 (async () => {
   // ── 深度報告：台積電真實資料 ──
   try {

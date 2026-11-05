@@ -37,7 +37,25 @@ a{color:var(--acc);text-decoration:none}
 .top .back:hover{background:var(--s2)}
 .brand{font-weight:900;font-size:17px;letter-spacing:.5px}
 .brand i{font-style:normal;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.top .date{font-size:12px;color:var(--mute);margin-left:2px}
+.top .date{font-size:12px;color:var(--mute);margin-left:2px;white-space:nowrap}
+/* 切換股市 */
+.mkt-btn{display:inline-flex;align-items:center;gap:3px;font-size:13px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--s2);border:1px solid var(--line2);white-space:nowrap}
+.mkt-btn span{font-size:10px;color:var(--mute)}
+.mkt-btn:active{transform:scale(.95)}
+.mkt-list{display:grid;gap:8px;margin-top:14px}
+.mkt-op{display:flex;align-items:center;gap:12px;text-align:left;padding:12px 14px;border-radius:var(--r1);background:var(--s2);border:1px solid var(--line)}
+.mkt-op.on{border-color:var(--acc);background:rgba(91,157,255,.1)}
+.mkt-op .fl{font-size:26px;line-height:1}
+.mkt-op .tx{flex:1;display:flex;flex-direction:column}
+.mkt-op .tx small{color:var(--sub);font-size:12px}
+.mkt-op .ck{color:var(--acc);font-weight:900}
+/* 收盤時間說明 */
+.close-i{padding:12px 14px}
+.close-i b{font-size:14px}
+.close-i ul{margin:6px 0 0 18px;font-size:12.5px;color:var(--sub);line-height:1.7}
+.hero .cur{font-size:13px;color:var(--mute);margin-left:6px;font-weight:400}
+.hero .en{display:block;font-size:11.5px}
+@media (max-width:380px){.top .date{display:none}}
 .pts{margin-left:auto;display:flex;align-items:center;gap:6px;padding:5px 12px 5px 8px;border-radius:99px;background:var(--s2);border:1px solid var(--line2);font-weight:700}
 .pts .coin{width:20px;height:20px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffe7a8,var(--gold) 55%,#c98d1c);display:grid;place-items:center;font-size:11px;color:var(--gold-ink);font-weight:900}
 .pts.bump{animation:bump .5s}

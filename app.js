@@ -9,25 +9,44 @@
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
   save();
 
-  // ───── 資料 ─────
+  // ───── 資料（台股、美股、陸股各一份；台股在 data/，美股 data/us/，陸股 data/cn/）─────
   let M = null, X = { items: {} }, D = null, WK = null, RP = null, byCode = new Map(), indAvg = {}, loadErr = '';
-  async function loadData() {
-    try {
-      const get = (f) => fetch(CFG.DATA + f + '?t=' + Math.floor(Date.now() / 300000), { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
-      const [m, x, d, w] = await Promise.all([get('market.json'), get('explain.json').catch(() => ({ items: {} })), get('daily.json').catch(() => null), get('weekly.json').catch(() => null)]);
-      M = m; X = x; D = d && d.date === m.date ? d : null; WK = w && w.groups && w.groups.length ? w : null;
-      byCode = new Map(m.rows.map((r) => [r[0], Object.fromEntries(m.cols.map((k, i) => [k, r[i]]))]));
+  if (!Core.MKT_IDS.includes(S.mkt)) S.mkt = 'tw';
+  const MK = () => S.mkt, GM = () => Core.MARKETS[S.mkt], isTW = () => S.mkt === 'tw';
+  const dir = (mkt) => CFG.DATA + (mkt === 'tw' ? '' : mkt + '/');
+  const tick = () => Math.floor(Date.now() / 300000);
+  const twStock = (c) => /^[1-9]\d{3}$/.test(c);
+  const DB = {};
+  function loadMarket(mkt) {
+    if (DB[mkt]?.p) return DB[mkt].p;
+    const db = (DB[mkt] = { M: null, X: { items: {} }, D: null, WK: null, byCode: new Map(), indAvg: {}, err: '' });
+    const get = (f) => fetch(dir(mkt) + f + '?t=' + tick(), { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    db.p = Promise.all([get('market.json'), get('explain.json').catch(() => ({ items: {} })), get('daily.json').catch(() => null), mkt === 'tw' ? get('weekly.json').catch(() => null) : null]).then(([m, x, d, w]) => {
+      db.M = m; db.X = x; db.D = d && d.date === m.date ? d : null; db.WK = w && w.groups && w.groups.length ? w : null;
+      db.byCode = new Map(m.rows.map((r) => [r[0], Object.fromEntries(m.cols.map((k, i) => [k, r[i]]))]));
       const agg = {};
-      for (const s of byCode.values()) { if (!/^[1-9]\d{3}$/.test(s.c) || s.val < 0.05) continue; const a = (agg[s.ind] ||= { t: 0, n: 0 }); a.t += s.pct; a.n++; }
-      indAvg = Object.fromEntries(Object.entries(agg).map(([k, v]) => [k, { pct: v.t / v.n, n: v.n }]));
-      loadErr = '';
-    } catch (e) { loadErr = '資料載入失敗，請檢查網路後重新整理。'; }
+      for (const s of db.byCode.values()) { if (mkt === 'tw' ? !twStock(s.c) || s.val < 0.05 : s.ind === 'ETF') continue; const a = (agg[s.ind] ||= { t: 0, n: 0 }); a.t += s.pct; a.n++; }
+      db.indAvg = Object.fromEntries(Object.entries(agg).map(([k, v]) => [k, { pct: v.t / v.n, n: v.n }]));
+    }).catch(() => { db.err = mkt === 'tw' ? '資料載入失敗，請檢查網路後重新整理。' : `${Core.MARKETS[mkt].name}資料載入失敗（可能還沒開始提供），請檢查網路後重新整理。`; db.p = null; });
+    return db.p;
   }
+  // 把目前市場的資料放到 M、X、byCode… 讓各頁共用
+  function useMarket() {
+    const db = DB[MK()] || {};
+    M = db.M || null; X = db.X || { items: {} }; D = db.D || null; WK = db.WK || null; byCode = db.byCode || new Map(); indAvg = db.indAvg || {}; loadErr = db.err || ''; RP = db.RP || null;
+  }
+  async function loadData() { await loadMarket(MK()); useMarket(); }
   // 個股報告書（約 200KB）：第一次打開報告書才載
-  let rpP = null;
-  const getReports = () => (rpP ||= fetch(CFG.DATA + 'reports.json?t=' + Math.floor(Date.now() / 300000), { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : { items: {} })).catch(() => ({ items: {} })).then((j) => (RP = j)));
+  const getReports = () => { const db = DB[MK()]; return (db.rpP ||= fetch(dir(MK()) + 'reports.json?t=' + tick(), { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : { items: {} })).catch(() => ({ items: {} })).then((j) => (db.RP = RP = j))); };
+  // 美股、陸股的走勢圖（近半年，約 1MB）：第一次打開個股才載
+  const getChart = () => { const db = DB[MK()]; return (db.chP ||= fetch(dir(MK()) + 'chart.json?t=' + tick(), { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error('走勢資料暫時抓不到'); return r.json(); }).catch((e) => { db.chP = null; throw e; })); };
+  const chartRows = (ch, code) => { const c = ch.c[code], v = ch.v[code]; if (!c) return []; return ch.dates.map((date, i) => (c[i] > 0 ? { date, close: c[i], Trading_Volume: (v[i] || 0) * 100 } : null)).filter(Boolean); };
   const md = (d) => (d ? d.slice(5).replace('-', '/') : '');
-  const stocksOnly = () => [...byCode.values()].filter((s) => /^[1-9]\d{3}$/.test(s.c));
+  const stocksOnly = () => [...byCode.values()].filter((s) => (isTW() ? twStock(s.c) : s.ind !== 'ETF'));
+  // 單位：台股成交量是「張」、成交值「億」；美股陸股是「股」和「億美元／億人民幣」
+  const volTxt = (s) => (isTW() ? s.vol.toLocaleString('en-US') + ' 張' : Core.fmtShares(s.vol));
+  const valTxt = (v) => (v == null ? '—' : v + ' ' + (isTW() ? '億' : GM().valUnit));
+  const capTxt = (c) => (!c ? '—' : (c >= 10000 ? (c / 10000).toFixed(2) + ' 兆' : c.toLocaleString('en-US') + ' 億') + (isTW() ? '' : GM().cur === '美元' ? '美元' : '人民幣'));
 
   // FinMind：App 直接抓（免費、每個使用者自己算額度）
   const fmCache = new Map();
@@ -63,7 +82,7 @@
   const skel = (n = 3) => `<div class="skel">${'<i></i>'.repeat(n)}</div>`;
   const spin = skel(3);
   const pageSkel = `<div class="card">${skel(2)}</div><div class="card">${skel(5)}</div>`;
-  const disclaimer = '<p class="disc">本 App 內容由程式和 AI 根據公開資料整理，只是幫你看懂資料，不是投資建議，也不保證正確。投資前請自己判斷，盈虧自負。資料來源：臺灣證券交易所、證券櫃檯買賣中心、FinMind。</p>';
+  const disclaimer = () => `<p class="disc">本 App 內容由程式和 AI 根據公開資料整理，只是幫你看懂資料，不是投資建議，也不保證正確。投資前請自己判斷，盈虧自負。${GM().name}資料來源：${GM().src}${isTW() ? '' : '（收盤後資料，非即時報價）'}。</p>`;
 
   // 走勢圖（SVG）。split＝盲測的分界點；hide＝不顯示價格
   function chart(rows, { split = -1, hide = false, h = 170 } = {}) {
@@ -91,14 +110,41 @@
   // ───── 頂部、選單 ─────
   let curRoute = 'home';
   function top(opts = {}) {
-    const d = M ? M.date.slice(5).replace('-', '/') : '';
+    const d = M ? (MK() === 'us' ? '美東 ' + md(M.date) : md(M.date) + ' 收盤') : '';
     $('#top').innerHTML = (opts.back ? '<button class="back" onclick="history.length>1?history.back():location.hash=\'#home\'">‹</button>' : '')
       + (opts.title ? `<span class="brand">${esc(opts.title)}</span>` : '<span class="brand">股市<i>白話通</i></span>')
-      + (d ? `<span class="date" id="dtag">${d} 收盤</span>` : '')
+      + (opts.back ? '' : `<button class="mkt-btn" id="mktBtn" aria-label="切換股市">${GM().flag} ${GM().name}<span>▾</span></button>`)
+      + (d ? `<span class="date" id="dtag">${d}</span>` : '')
       + `<a class="tb-ic" href="#search" aria-label="查詢股票" style="margin-left:auto">🔍</a><button class="tb-ic" id="newsBtn" aria-label="公告">📢</button><a class="pts" href="#me" id="pts" style="margin-left:4px"><span class="coin">點</span><span class="num" data-v="${S.pts}">${S.pts}</span></a>`;
     // 頂部背景跟著大盤紅綠（勾選連動：狀態一變，整個畫面跟著變）
     if (window.STUDIO_NEWS) STUDIO_NEWS.refresh();
     if (M?.index?.[0]) document.body.dataset.mkt = M.index[0].chg > 0 ? 'up' : M.index[0].chg < 0 ? 'down' : 'flat';
+    const mb = $('#mktBtn'); if (mb) mb.onclick = marketSheet;
+  }
+
+  // ───── 切換股市：台股／美股／陸股 ─────
+  const DEF_WATCH = { us: ['NVDA', 'AAPL', 'TSM'], cn: ['600519', '300750', '002594'] };
+  function marketSheet() {
+    FX.haptic(6);
+    const el = modal(`<h2>切換股市</h2><p class="sub">三個市場都是<b>收盤後</b>的資料和 AI 報告，下面是各市場的收盤時間（台灣時間）。</p>
+      <div class="mkt-list">${Core.MKT_IDS.map((id) => { const g = Core.MARKETS[id], ci = Core.closeInfo(id), db = DB[id];
+        return `<button class="mkt-op ${id === MK() ? 'on' : ''}" data-m="${id}"><span class="fl">${g.flag}</span><span class="tx"><b>${g.name}</b><small>${ci.short}${db?.M ? '・目前資料 ' + Core.dateLabel(id, db.M.date) : ''}</small></span>${id === MK() ? '<span class="ck">✓</span>' : ''}</button>`; }).join('')}</div>`);
+    el.addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (!b) return; el.remove(); switchMarket(b.dataset.m); });
+  }
+  async function switchMarket(id) {
+    if (!Core.MARKETS[id]) return;
+    const changed = id !== MK();
+    S.mkt = id;
+    // 第一次進美股、陸股：先放幾檔常見的自選股
+    S.watchInit ||= {};
+    if (id !== 'tw' && !S.watchInit[id]) { S.watchInit[id] = 1; for (const c of DEF_WATCH[id]) if (!S.watch.includes(c)) S.watch.push(c); }
+    save();
+    if (changed) { HM.scope = 'all'; hmSave(); toast(`已切換到${Core.MARKETS[id].name}`); }
+    useMarket();
+    const r = (location.hash.slice(1) || 'home').split('/')[0];
+    if (['s', 'weekly', 'search'].includes(r)) location.hash = '#home'; else route();
+    await loadData();
+    if (MK() === id) route();
   }
   // 點數變動：數字滾動＋跳一下；加點時從點數徽章噴金幣
   const bump = () => {
@@ -161,7 +207,7 @@
 
   // ───── 股票列表 ─────
   const mk = (s) => (s.m === 'O' ? 'otc_' : 'tse_') + s.c;
-  const item = (s, i = 0) => `<a class="it" href="#s/${s.c}" data-lc="${mk(s)}" data-lt="it" style="--k:${Math.min(i, 14)}"><div class="nm"><b>${esc(s.n)}</b>${X.items[s.c] ? '<span class="badge-ai">解說</span>' : ''}<small>${s.c}・${esc(s.ind)}${s.m === 'O' ? '・上櫃' : ''}</small></div>
+  const item = (s, i = 0) => `<a class="it" href="#s/${s.c}" data-lc="${mk(s)}" data-lt="it" style="--k:${Math.min(i, 14)}"><div class="nm"><b>${esc(s.n)}</b>${X.items[s.c] ? '<span class="badge-ai">解說</span>' : ''}<small>${s.c}・${esc(s.ind)}${s.m === 'O' && isTW() ? '・上櫃' : ''}</small></div>
     <div class="px num">${s.close}</div><div class="pc num ${cls(s.pct)}">${fp(s.pct)}</div></a>`;
   const listHtml = (arr) => (arr.length ? `<div class="list">${arr.map((s, i) => item(s, i)).join('')}</div>` : '<p class="empty">沒有資料</p>');
 
@@ -172,8 +218,10 @@
     top();
     if (!M) return ($('#view').innerHTML = loadErr ? `<p class="empty">${loadErr}</p>` : spin);
     const B = M.breadth, tot = B.up + B.down + B.flat || 1;
-    const L = { hot: '熱門', gain: '漲幅', lose: '跌幅', fbuy: '外資買', fsell: '外資賣', tbuy: '投信買', etf: 'ETF' };
-    const st = stocksOnly(), liq = st.filter((s) => s.val >= 0.3);
+    const L = isTW() ? { hot: '熱門', gain: '漲幅', lose: '跌幅', fbuy: '外資買', fsell: '外資賣', tbuy: '投信買', etf: 'ETF' }
+      : { hot: '熱門', gain: '漲幅', lose: '跌幅', ...([...byCode.values()].some((s) => s.ind === 'ETF') ? { etf: 'ETF' } : {}) };
+    if (!L[homeTab]) homeTab = 'hot';
+    const st = stocksOnly(), liq = isTW() ? st.filter((s) => s.val >= 0.3) : [...st].sort((a, b) => b.val - a.val).slice(0, Math.max(60, Math.round(st.length * 0.4))); // 美股陸股：成交值前 40% 才排漲跌幅（冷門股不算）
     const lists = {
       hot: () => [...st].sort((a, b) => b.val - a.val), gain: () => [...liq].sort((a, b) => b.pct - a.pct), lose: () => [...liq].sort((a, b) => a.pct - b.pct),
       fbuy: () => st.filter((s) => s.f != null).sort((a, b) => b.f * b.close - a.f * a.close), fsell: () => st.filter((s) => s.f != null).sort((a, b) => a.f * a.close - b.f * b.close),
@@ -183,22 +231,26 @@
     const idxCard = (i, k) => {
       const hist = k === 0 && M.taiex?.length >= 5 ? M.taiex.map(([date, close, v]) => ({ date, close, Trading_Volume: v })) : null;
       const lk = /櫃買/.test(i.name) ? 'otc_o00' : /加權/.test(i.name) ? 'tse_t00' : '';
-      return `<div class="snap-c idx"${lk ? ` data-lc="${lk}" data-lt="idx"` : ''}><small class="mute">${i.name}${hist ? '・近 3 個月' : ''}</small><div class="v num ${cls(i.chg)}">${i.close.toLocaleString('en-US')}</div>
+      return `<div class="snap-c idx"${lk && isTW() ? ` data-lc="${lk}" data-lt="idx"` : ''}><small class="mute">${i.name}${hist ? '・近 3 個月' : ''}</small><div class="v num ${cls(i.chg)}">${i.close.toLocaleString('en-US')}</div>
         <div class="c num ${cls(i.chg)}">${arrow(i.chg)} ${Math.abs(i.chg)}（${fp(i.pct)}）</div>${hist ? chart(hist, { h: 70, hide: true }) : `<div class="idx-big ${cls(i.chg)}">${arrow(i.chg) || '–'}</div>`}</div>`;
     };
-    const imax = Math.max(...['f', 't', 'd'].map((k) => Math.abs(M.inst[k] || 0))) || 1;
+    const imax = Math.max(...['f', 't', 'd'].map((k) => Math.abs(M.inst?.[k] || 0))) || 1;
     const ibar = (k, n) => { const v = M.inst[k] || 0, w = (Math.abs(v) / imax) * 50; return `<div class="ibar"><span>${n}</span><div class="ib-t"><i class="${cls(v)}" style="${v >= 0 ? 'left:50%' : `right:50%`};width:${w}%"></i></div><b class="num ${cls(v)}">${fc(v)} 億</b></div>`; };
     const cards = [
       ...M.index.map(idxCard),
-      `<div class="snap-c"><small class="mute">今天漲跌家數・${M.otc ? '上市＋上櫃' : '上市'}</small>
+      `<div class="snap-c"><small class="mute">今天漲跌家數・${isTW() ? (M.otc ? '上市＋上櫃' : '上市') : esc(M.scope || '收錄的股票')}</small>
         <div class="row" style="margin-top:6px"><b class="num up" style="font-size:24px">${B.up}</b><span class="mute small" style="margin:auto">平盤 ${B.flat}</span><b class="num down" style="font-size:24px">${B.down}</b></div>
         <div class="bar3"><i style="width:${(B.up / tot) * 100}%;background:var(--up)"></i><i style="width:${(B.flat / tot) * 100}%;background:var(--line2)"></i><i style="width:${(B.down / tot) * 100}%;background:var(--down)"></i></div>
         <p class="small sub" style="margin-top:6px">${B.up > B.down * 1.5 ? '大部分股票都在漲，普漲的一天。' : B.down > B.up * 1.5 ? '大部分股票都在跌，普跌的一天。' : '漲跌家數差不多，有漲有跌。'}</p></div>`,
-      `<div class="snap-c"><small class="mute">三大法人買賣超（估算）</small><div style="margin-top:8px">${ibar('f', '外資')}${ibar('t', '投信')}${ibar('d', '自營商')}</div>
+      ...(M.inst ? [`<div class="snap-c"><small class="mute">三大法人買賣超（估算）</small><div style="margin-top:8px">${ibar('f', '外資')}${ibar('t', '投信')}${ibar('d', '自營商')}</div>
         <p class="small sub" style="margin-top:auto">${(() => { const f = M.inst.f || 0, t = M.inst.t || 0, sum = f + t + (M.inst.d || 0);
           const w = (v) => (v >= 0 ? '買' : '賣');
-          return Math.sign(f) !== Math.sign(t) ? `外資${w(f)}、投信${w(t)}，法人看法分歧；合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。` : `外資和投信都在${w(f)}，合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。`; })()}</p></div>`,
+          return Math.sign(f) !== Math.sign(t) ? `外資${w(f)}、投信${w(t)}，法人看法分歧；合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。` : `外資和投信都在${w(f)}，合計${w(sum)}超約 ${Math.abs(Math.round(sum))} 億。`; })()}</p></div>`] : []),
     ];
+    // 收盤時間說明（台灣時間）：很多人不知道美股、陸股幾點收盤 → 每個市場首頁最上面都寫清楚
+    const ci = Core.closeInfo(MK());
+    const closeCard = `<div class="card close-i"><div class="row"><b>🕐 ${esc(ci.title)}</b><small class="mute" style="margin-left:auto">${esc(Core.dateLabel(MK(), M.date))}</small></div>
+      <ul>${ci.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></div>`;
     // 自選股晨報（免費）：你的自選股上個交易日怎麼了
     const wl = S.watch.map((c) => byCode.get(c)).filter(Boolean);
     const wline = (s) => {
@@ -209,19 +261,19 @@
       return `<a class="wl" href="#s/${s.c}"><div><b>${esc(s.n)}</b> <span class="num ${cls(s.pct)}">${fp(s.pct)}</span>${ex ? '<span class="badge-ai">解說</span>' : ''}<small>${bits.join('・') || '—'}</small></div><span class="mute">›</span></a>`;
     };
     const wbest = [...wl].sort((a, b) => b.pct - a.pct);
-    const watchCard = wl.length ? `<div class="card"><h3>⭐ 自選股晨報<small>${md(M.date)} 收盤</small></h3>
+    const watchCard = wl.length ? `<div class="card"><h3>⭐ 自選股${isTW() ? '晨報' : '盤後'}<small>${esc(Core.dateLabel(MK(), M.date))}</small></h3>
       <p class="small sub">你的 ${wl.length} 檔自選股：${wl.filter((s) => s.pct > 0).length} 漲、${wl.filter((s) => s.pct < 0).length} 跌。表現最好的是 <b>${esc(wbest[0].n)}</b>（<span class="${cls(wbest[0].pct)}">${fp(wbest[0].pct)}</span>）${wl.length > 1 ? `，最差的是 <b>${esc(wbest[wbest.length - 1].n)}</b>（<span class="${cls(wbest[wbest.length - 1].pct)}">${fp(wbest[wbest.length - 1].pct)}</span>）` : ''}。</p>
       <div class="wls">${wl.slice(0, 8).map(wline).join('')}</div>${wl.length > 8 ? '<a class="btn block" href="#watch" style="margin-top:8px">看全部自選</a>' : ''}</div>` : '';
-    const dailyCard = D ? `<div class="card daily"><div class="dl-h"><span class="tagai">🤖 AI 盤後日報</span><small class="mute">${md(D.date)} 收盤後</small></div>
+    const dailyCard = D ? `<div class="card daily"><div class="dl-h"><span class="tagai">🤖 ${isTW() ? '' : GM().name + ' '}AI 盤後日報</span><small class="mute">${MK() === 'us' ? '美東 ' + md(D.date) : md(D.date)} 收盤後</small></div>
       <h2>${esc(D.title)}</h2><p class="dl-t" id="dlt">${esc(D.text)}</p>
       ${D.focus?.length ? `<div class="chips" style="margin-top:8px">${D.focus.map((c) => byCode.get(c)).filter(Boolean).map((s) => `<a class="chip" href="#s/${s.c}">${esc(s.n)} <b class="num ${cls(s.pct)}">${fp(s.pct, 1)}</b></a>`).join('')}</div>` : ''}
-      <p class="disc">${D.ai ? '由 AI 根據證交所、櫃買中心公開資料和新聞標題整理，可能有錯，不是投資建議。' : '由程式根據公開資料整理。'}</p></div>` : '';
+      <p class="disc">${D.ai ? `由 AI 根據${isTW() ? '證交所、櫃買中心' : GM().src}公開資料${GM().id === 'cn' ? '' : '和新聞標題'}整理，可能有錯，不是投資建議。` : '由程式根據公開資料整理。'}</p></div>` : '';
     const weekCard = WK ? `<a class="card wkc" href="#weekly"><div class="row"><h3 style="margin:0">🏭 概念股 AI 週報<small>近 5 個交易日・到 ${md(WK.groups[0].to)}</small></h3><span class="mute" style="margin-left:auto">›</span></div>
       <div class="chips" style="margin-top:8px">${WK.groups.slice(0, 3).map((g) => `<span class="chip">${esc(g.name)} <b class="num ${cls(g.pct5)}">${fp(g.pct5, 1)}</b></span>`).join('')}<span class="chip">…還有 ${Math.max(0, WK.groups.length - 3)} 個</span></div>
       <p class="small sub" style="margin-top:6px">12 個族群這週誰強誰弱、為什麼（${Core.ECON.COST.weekly} 點）</p></a>` : '';
     $('#view').innerHTML = `
-      <a class="search" href="#search"><span>🔍</span><span class="mute">輸入代號或名稱，例如 2330、台積電</span></a>
-      ${dailyCard}${watchCard}
+      <a class="search" href="#search"><span>🔍</span><span class="mute">${searchHint()}</span></a>
+      ${closeCard}${dailyCard}${watchCard}
       <div class="snap" id="snap">${cards.join('')}</div>
       <div class="dots" id="dots">${cards.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>
       <div class="card"><h3>族群強弱<small>同產業平均漲跌・點了看熱力圖</small></h3>
@@ -230,8 +282,8 @@
         <a class="btn block" href="#heat" style="margin-top:10px">🔥 看全市場熱力圖</a></div>
       ${weekCard}
       <div class="card"><div class="tabs" id="tabs">${Object.entries(L).map(([k, v]) => `<button data-k="${k}" class="${k === homeTab ? 'on' : ''}">${v}</button>`).join('')}</div><div id="hl"></div>
-        <p class="disc">有「解說」標籤的是今天的熱門股，已經準備好白話解說。其他股票打開時才即時整理。</p></div>
-      ${disclaimer}`;
+        <p class="disc">有「解說」標籤的是今天的熱門股，已經準備好白話解說。其他股票打開時才即時整理。${isTW() ? '' : `${GM().name}目前收錄${esc(M.scope || '')}，共 ${M.rows.length} 檔。`}</p></div>
+      ${disclaimer()}`;
     const draw = () => { $('#hl').innerHTML = listHtml(lists[homeTab]().slice(0, 30)); };
     $('#tabs').onclick = (e) => { const k = e.target.dataset.k; if (!k) return; homeTab = k; [...$('#tabs').children].forEach((b) => b.classList.toggle('on', b.dataset.k === k)); FX.haptic(4); draw(); };
     draw();
@@ -239,16 +291,19 @@
   };
 
   let lastQ = '';
+  const searchHint = () => ({ tw: '輸入代號或名稱，例如 2330、台積電', us: '輸入代號或名稱，例如 NVDA、輝達、蘋果', cn: '輸入代號或名稱，例如 600519、茅臺、寧德' }[MK()]);
   V.search = () => {
     top();
-    $('#view').innerHTML = `<div class="search"><span>🔍</span><input id="q" placeholder="代號或名稱，例如 2330、台積電" value="${esc(lastQ)}" autocomplete="off" inputmode="search"></div><div id="res"></div>`;
+    $('#view').innerHTML = `<div class="search"><span>🔍</span><input id="q" placeholder="${searchHint().replace('輸入', '')}" value="${esc(lastQ)}" autocomplete="off" inputmode="search"></div><div id="res"></div>`;
     const q = $('#q');
     const run = () => {
       lastQ = q.value.trim();
       if (!M) return ($('#res').innerHTML = spin);
       if (!lastQ) return ($('#res').innerHTML = '<div class="card"><h3>大家常查</h3>' + listHtml(stocksOnly().sort((a, b) => b.val - a.val).slice(0, 12)) + '</div>');
       const k = lastQ.toUpperCase();
-      const r = [...byCode.values()].filter((s) => s.c.startsWith(k) || s.n.toUpperCase().includes(k))
+      // 陸股名稱是「貴州茅臺」：打「茅台」也要找得到（台／臺 通用）
+      const kk = k.replace(/台/g, '臺');
+      const r = [...byCode.values()].filter((s) => s.c.startsWith(k) || s.n.toUpperCase().includes(k) || s.n.replace(/台/g, '臺').toUpperCase().includes(kk) || (s.en && s.en.toUpperCase().includes(k)))
         .sort((a, b) => (b.c === k) - (a.c === k) || (b.c.startsWith(k)) - (a.c.startsWith(k)) || b.val - a.val).slice(0, 40);
       $('#res').innerHTML = r.length ? '<div class="card">' + listHtml(r) + '</div>' : '<p class="empty">找不到這檔股票</p>';
     };
@@ -258,7 +313,14 @@
 
   // 個股頁
   const exCache = new Map();
+  // 從網址打開的股票不是目前的市場（例如在台股時點了美股的連結）→ 自動切過去
+  // 美股＝英文代號；陸股＝6 碼（000～003、30、60、68 開頭）；其他是台股（4 碼、00 開頭的 ETF）
+  const guessMkt = (code) => (/^[A-Z][A-Z.\-]*$/.test(code) ? 'us' : /^(00[0-3]\d{3}|30\d{4}|6[08]\d{4})$/.test(code) ? 'cn' : 'tw');
   V.s = async (code) => {
+    if (M && !byCode.has(code)) {
+      const g = guessMkt(code);
+      if (g !== MK()) { S.mkt = g; save(); await loadData(); if (curRoute !== 's/' + code) return; }
+    }
     const s = byCode.get(code);
     top({ back: true, title: s ? s.n : '個股' });
     if (!M) return ($('#view').innerHTML = loadErr ? `<p class="empty">${loadErr}</p>` : spin);
@@ -272,25 +334,36 @@
     const on = S.watch.includes(code);
     $('#view').innerHTML = `
       <div class="card hero" data-lc="${mk(s)}" data-lt="hero">
-        <div class="row"><div><div class="nm">${esc(s.n)}</div><small class="mute">${s.c}・${s.m === 'O' ? '上櫃' : '上市'}・${esc(s.ind)}</small></div><button class="star" id="star" title="加入自選">${on ? '⭐' : '☆'}</button></div>
-        <div class="px num ${cls(s.pct)}">${s.close}</div><div class="ch num ${cls(s.pct)}">${arrow(s.chg)} ${Math.abs(s.chg)}（${fp(s.pct)}）</div>
+        <div class="row"><div><div class="nm">${esc(s.n)}</div><small class="mute">${s.c}・${isTW() ? (s.m === 'O' ? '上櫃' : '上市') : GM().flag + ' ' + esc(s.m || GM().name)}・${esc(s.ind)}</small>${s.en ? `<small class="mute en">${esc(s.en)}</small>` : ''}</div><button class="star" id="star" title="加入自選">${on ? '⭐' : '☆'}</button></div>
+        <div class="px num ${cls(s.pct)}">${s.close}${isTW() ? '' : `<small class="cur">${GM().cur}</small>`}</div><div class="ch num ${cls(s.pct)}">${arrow(s.chg)} ${Math.abs(s.chg)}（${fp(s.pct)}）</div>
         <div class="live5" hidden></div>
         <div class="kv-h small mute" hidden></div>
-        <div class="kv">${kv('成交量', s.vol.toLocaleString('en-US') + ' 張')}${kv('成交值', s.val + ' 億')}${kv('量比', ex?.vr ? ex.vr + ' 倍' : '—')}
-          ${kv('外資', fl(s.f), cls(s.f))}${kv('投信', fl(s.t), cls(s.t))}${kv('自營商', fl(s.d), cls(s.d))}</div>
-        <p class="disc">法人買賣超單位：張。量比＝今天成交量 ÷ 前 20 天平均。</p>
+        <div class="kv">${kv('成交量', volTxt(s))}${kv('成交值', valTxt(s.val))}${kv('量比', ex?.vr ? ex.vr + ' 倍' : '<span id="vr">—</span>')}
+          ${isTW() ? `${kv('外資', fl(s.f), cls(s.f))}${kv('投信', fl(s.t), cls(s.t))}${kv('自營商', fl(s.d), cls(s.d))}` : `${s.cap ? kv(MK() === 'cn' ? '流通市值' : '市值', capTxt(s.cap)) : kv('今天漲跌', fp(s.pct), cls(s.pct))}${kv('近 5 日', '<span id="r5">—</span>')}${kv('近 20 日', '<span id="r20">—</span>')}`}</div>
+        <p class="disc">${isTW() ? '法人買賣超單位：張。' : `${esc(Core.dateLabel(MK(), M.date))}的資料。`}量比＝今天成交量 ÷ 前 20 天平均。</p>
       </div>
       <div class="card"><h3>📉 近半年走勢</h3><div id="ch">${spin}</div></div>
       <div class="card" id="ex"></div>
       <div class="card" id="deep"></div>
-      ${disclaimer}`;
+      ${disclaimer()}`;
     $('#star').onclick = (e) => {
       const add = Core.toggleWatch(S, code); save();
       const b = e.currentTarget; b.textContent = add ? '⭐' : '☆'; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
       if (add) { const r = b.getBoundingClientRect(); FX.burst(r.left + r.width / 2, r.top + r.height / 2, { n: 8, dist: 30, colors: ['#ffc85b', '#ffe7a8'], coin: false }); }
       FX.haptic(add ? 10 : 5); toast(add ? '已加入自選' : '已移出自選');
     };
-    fm('TaiwanStockPrice', { data_id: code, start_date: addDays(M.date, -183) }).then((rows) => { const el = $('#ch'); if (el) el.innerHTML = chart(rows); }).catch((e) => { const el = $('#ch'); if (el) el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+    const histP = isTW() ? fm('TaiwanStockPrice', { data_id: code, start_date: addDays(M.date, -183) }) : getChart().then((ch) => chartRows(ch, code));
+    histP.then((rows) => {
+      const el = $('#ch'); if (el) el.innerHTML = chart(rows);
+      if (!isTW() && rows.length > 21) { // 美股陸股：近 5／20 日漲跌、量比從走勢資料算
+        const n = rows.length, c = rows[n - 1].close, ret = (k) => fp((c / rows[n - 1 - k].close - 1) * 100, 1);
+        const a = $('#r5'), b = $('#r20'), v = $('#vr');
+        if (a) { a.textContent = ret(5); a.className = cls(c - rows[n - 6].close); }
+        if (b) { b.textContent = ret(20); b.className = cls(c - rows[n - 21].close); }
+        const v20 = rows.slice(-21, -1).reduce((x, r) => x + r.Trading_Volume, 0) / 20;
+        if (v && v20) v.textContent = Math.round((rows[n - 1].Trading_Volume / v20) * 10) / 10 + ' 倍';
+      }
+    }).catch((e) => { const el = $('#ch'); if (el) el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
     drawExplain(s); drawDeep(s);
   };
 
@@ -303,7 +376,8 @@
     const word = s.pct > 0 ? '漲' : s.pct < 0 ? '跌' : '沒動';
     const head = `<h3>🤖 為什麼${dayWord()}${word}？</h3>`;
     if (!Core.isUnlocked(S, s.c, 'explain', M.date)) {
-      el.innerHTML = head + lockBox(s, 'explain', `${esc(s.n)}今天${word}的白話解說：和大盤、同產業比起來怎麼樣，成交量是不是異常，外資投信在買還是賣，還有今天的相關新聞…`);
+      el.innerHTML = head + lockBox(s, 'explain', isTW() ? `${esc(s.n)}今天${word}的白話解說：和大盤、同產業比起來怎麼樣，成交量是不是異常，外資投信在買還是賣，還有今天的相關新聞…`
+        : `${esc(s.n)}${word}的白話解說：和${GM().idxName}、同產業比起來怎麼樣，成交量是不是異常，最近一週一個月的走勢${MK() === 'us' ? '，還有相關的英文新聞（AI 幫你用中文講重點）' : ''}…`);
       el.querySelector('[data-unlock]').onclick = (e) => tryUnlock(s.c, 'explain', (f) => drawExplain(s, f), e.currentTarget);
       return;
     }
@@ -312,13 +386,24 @@
       el.classList.toggle('reveal', !!fresh);
       el.innerHTML = head + `<p class="explain">${esc(t)}</p>
         <div style="margin-top:8px">${(tags || []).map((x) => `<span class="tag">#${esc(x)}</span>`).join('')}</div>
-        ${news?.length ? `<div class="news"><small class="mute">今天的相關新聞</small>${news.map((n) => `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}<small>${esc(n.src || '')}</small></a>`).join('')}</div>` : ''}
-        <p class="disc">${ai ? '由 AI 根據上面的資料整理，可能有錯，請以新聞原文為準。' : '由程式根據行情、法人和新聞整理。'}</p>`;
+        ${news?.length ? `<div class="news"><small class="mute">${MK() === 'us' ? '相關新聞（英文原文）' : '今天的相關新聞'}</small>${news.map((n) => `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}<small>${esc(n.src || '')}</small></a>`).join('')}</div>` : ''}
+        <p class="disc">${ai ? `由 AI 根據${isTW() ? '上面的資料' : '行情、同產業比較' + (news?.length ? '和新聞標題' : '')}整理，可能有錯${news?.length ? '，請以新聞原文為準' : ''}。` : isTW() ? '由程式根據行情、法人和新聞整理。' : '由程式根據行情和同產業比較整理（這檔沒有預先準備 AI 解說）。'}</p>`;
     };
     if (ex) return render(ex.t, ex.ai, ex.tags, ex.news);
     // 沒有預先準備的股票：當場用規則整理
     el.innerHTML = head + spin;
-    let p = exCache.get(s.c);
+    let p = exCache.get(MK() + s.c);
+    if (!p && !isTW()) {
+      // 美股陸股：用近半年走勢算量比、近期漲跌，規則版整理（沒有新聞）
+      const g = GM();
+      p = getChart().then((ch) => {
+        const h = chartRows(ch, s.c), n = h.length;
+        const v20 = h.slice(-21, -1).reduce((a, r) => a + r.Trading_Volume, 0) / Math.max(1, Math.min(20, n - 1));
+        const ia = indAvg[s.ind] || {};
+        return { ...Core.explainRule({ ...s, name: s.n, cur: g.cur, limit: MK() === 'cn' ? Core.cnLimit(s.c, s.n) : g.limit, volRatio: v20 ? h[n - 1].Trading_Volume / v20 : NaN, mktPct: M.index[0]?.pct, indPct: ia.pct, indN: ia.n, news: [] }), news: [] };
+      });
+      exCache.set(MK() + s.c, p); p.catch(() => exCache.delete(MK() + s.c));
+    }
     if (!p) {
       p = Promise.all([
         fm('TaiwanStockPrice', { data_id: s.c, start_date: addDays(M.date, -45) }),
@@ -333,7 +418,7 @@
         const r = Core.explainRule({ ...s, volRatio: v20 ? (s.vol * 1000) / v20 : NaN, mktPct: idx?.pct, indPct: ia.pct, indN: ia.n, news: nws });
         return { ...r, news: nws };
       });
-      exCache.set(s.c, p); p.catch(() => exCache.delete(s.c));
+      exCache.set(MK() + s.c, p); p.catch(() => exCache.delete(MK() + s.c));
     }
     p.then((r) => { if ($('#ex') === el) render(r.text, false, r.tags, r.news); })
       .catch((e) => { el.innerHTML = head + `<p class="empty">${esc(e.message)}</p><button class="btn block" id="exr">重試（不用再扣點）</button>`; $('#exr').onclick = () => drawExplain(s); });
@@ -342,14 +427,21 @@
   const deepCache = new Map();
   function drawDeep(s, fresh) {
     const el = $('#deep'); if (!el) return;
-    const head = '<h3>📑 AI 個股報告書<small>籌碼・營收・評價・歷史相似</small></h3>';
+    const head = `<h3>📑 AI 個股報告書<small>${isTW() ? '籌碼・營收・評價・歷史相似' : MK() === 'cn' ? '股價位置・本益比・歷史相似' : '股價位置・成交量・歷史相似'}</small></h3>`;
     if (!Core.isUnlocked(S, s.c, 'deep', M.date)) {
-      el.innerHTML = head + lockBox(s, 'deep', 'AI 幫你讀完 3 年股價、法人、融資、營收、本益比，寫成一份有結論的報告：偏多和偏空訊號各有幾個？外資投信近 20 天的動向、融資有沒有暴增、月營收年增率、本益比貴不貴、歷史上走勢很像的時候之後怎麼走，還有魔鬼代言人的風險清單…');
+      el.innerHTML = head + lockBox(s, 'deep', isTW() ? 'AI 幫你讀完 3 年股價、法人、融資、營收、本益比，寫成一份有結論的報告：偏多和偏空訊號各有幾個？外資投信近 20 天的動向、融資有沒有暴增、月營收年增率、本益比貴不貴、歷史上走勢很像的時候之後怎麼走，還有魔鬼代言人的風險清單…'
+        : `AI 幫你讀完近 2 年股價${MK() === 'cn' ? '和本益比' : '和成交量'}，寫成一份有結論的報告：偏多和偏空訊號各有幾個？股價在一年高低區間的哪裡、月線季線年線、${MK() === 'cn' ? '本益比貴不貴、' : ''}歷史上走勢很像的時候之後怎麼走，還有魔鬼代言人的風險清單…`);
       el.querySelector('[data-unlock]').onclick = (e) => tryUnlock(s.c, 'deep', (f) => drawDeep(s, f), e.currentTarget);
       return;
     }
-    el.innerHTML = head + skel(4) + '<p class="small mute" style="text-align:center">整理 3 年股價、法人、融資、營收資料中…</p>';
-    let p = deepCache.get(s.c);
+    el.innerHTML = head + skel(4) + `<p class="small mute" style="text-align:center">${isTW() ? '整理 3 年股價、法人、融資、營收資料中…' : '整理股價資料中…'}</p>`;
+    let p = deepCache.get(MK() + s.c);
+    if (!p && !isTW()) {
+      // 美股陸股：伺服器每天做好成交值前 60 檔（2 年資料＋AI 結論）；其他股票用近半年走勢當場整理
+      p = getReports().then((rp) => { const it = rp.items?.[s.c]; if (it?.R) return { ...it.R, aiText: it.ai, made: it.d };
+        return getChart().then((ch) => ({ ...Core.analyze({ prices: chartRows(ch, s.c), cur: GM().cur, volFmt: Core.fmtShares }), short: true })); });
+      deepCache.set(MK() + s.c, p); p.catch(() => deepCache.delete(MK() + s.c));
+    }
     if (!p) {
       const d = M.date, q = (start) => ({ data_id: s.c, start_date: start });
       p = getReports().then((rp) => { const it = rp.items?.[s.c]; if (it?.R) return { ...it.R, aiText: it.ai, made: it.d }; return Promise.all([
@@ -359,7 +451,7 @@
         fm('TaiwanStockMonthRevenue', q(addDays(d, -500))).catch(() => []),
         fm('TaiwanStockPER', q(addDays(d, -365))).catch(() => []),
       ]).then(([prices, inst, margin, rev, per]) => Core.analyze({ prices, inst, margin, rev, per })); });
-      deepCache.set(s.c, p); p.catch(() => deepCache.delete(s.c));
+      deepCache.set(MK() + s.c, p); p.catch(() => deepCache.delete(MK() + s.c));
     }
     p.then((R) => {
       if ($('#deep') !== el) return;
@@ -369,7 +461,7 @@
       // 疊卡：各項分析先疊成一疊（上面露出標題），點開依序攤開，再點收起
       const n = R.sections.length;
       el.classList.toggle('reveal', !!fresh);
-      const aiBox = R.aiText ? `<div class="aic"><b>🤖 AI 結論</b><p>${esc(R.aiText)}</p></div>` : `<p class="small mute" style="margin:0 0 8px">這檔不在每天的 AI 報告名單（成交值前 100 檔）內，以下是程式即時整理的報告，沒有 AI 結論。</p>`;
+      const aiBox = R.aiText ? `<div class="aic"><b>🤖 AI 結論</b><p>${esc(R.aiText)}</p></div>` : `<p class="small mute" style="margin:0 0 8px">${R.short ? `這檔不在每天的 AI 報告名單（${GM().name}成交值前 60 檔）內，以下是程式用近半年走勢即時整理的報告，沒有 AI 結論。` : R.made ? '這份報告今天的 AI 額度用完了，先給程式整理的版本，沒有 AI 結論。' : `這檔不在每天的 AI 報告名單（成交值前 ${isTW() ? 100 : 60} 檔）內，以下是程式即時整理的報告，沒有 AI 結論。`}</p>`;
       el.innerHTML = head + aiBox + `<div class="summary">${esc(R.summary)}</div>
         <div class="meter"><i style="width:${(R.bull / tot) * 100}%;background:var(--up)"></i><i style="width:${(R.bear / tot) * 100}%;background:var(--down)"></i></div>
         <div class="row small" style="margin-bottom:10px"><span class="up">偏多 ${R.bull}</span><span class="down" style="margin-left:auto">偏空 ${R.bear}</span></div>
@@ -395,7 +487,8 @@
     if (!M) return ($('#view').innerHTML = pageSkel);
     const W = Math.max(280, $('#view').clientWidth - 32);
     const sc = HM.scope, isAll = sc === 'all';
-    const grp = sc.startsWith('grp:') ? Core.GROUPS.find((g) => g.id === sc.slice(4)) : null;
+    if (!isTW() && HM.color === 'f') HM.color = 'pct'; // 美股陸股沒有外資買賣超
+    const grp = sc.startsWith('grp:') ? Core.groupsOf(MK()).find((g) => g.id === sc.slice(4)) : null;
     const indName = sc.startsWith('ind:') ? sc.slice(4) : null;
     let pool;
     if (isAll) pool = stocksOnly();
@@ -416,7 +509,7 @@
     if (isAll) items = items.slice(0, eq || mv ? 300 : 400);
     if (eq) items = items.map((x) => ({ s: x.s, v: 1 }));
     const fScale = (() => { const a = items.map((x) => Math.abs(fv(x.s))).sort((p, q) => p - q); return a[Math.floor(a.length * 0.9)] || 1; })();
-    const liveTiles = !isAll && HM.color === 'pct' && items.length <= 150;
+    const liveTiles = isTW() && !isAll && HM.color === 'pct' && items.length <= 150;
     const colorOf = (s) => (HM.color === 'f' ? Core.heatColor((fv(s) / fScale) * 6) : Core.heatColor(s.pct));
     const H = Math.round(W * (isAll ? 1.45 : items.length > 12 ? 1.1 : 0.85));
     const tile = (t, k) => {
@@ -443,17 +536,17 @@
     const inds = [...new Set(stocksOnly().map((s) => s.ind))].filter((x) => x !== '其他').sort((a, b) => a.localeCompare(b, 'zh-Hant'));
     const title = isAll ? '全市場（照產業分區）' : indName ? `產業：${indName}` : sc === 'watch' ? '⭐ 我的自選' : grp.name;
     $('#view').innerHTML = `
-      <div class="hm-chips">${chip('all', '全市場')}${chip('watch', '⭐ 自選')}${Core.GROUPS.map((g) => chip('grp:' + g.id, g.name)).join('')}</div>
+      <div class="hm-chips">${chip('all', '全市場')}${chip('watch', '⭐ 自選')}${Core.groupsOf(MK()).map((g) => chip('grp:' + g.id, g.name)).join('')}</div>
       <div class="row" style="gap:6px;margin:10px 0 8px;flex-wrap:wrap">
         <div class="seg" id="sz"><button data-v="cap" class="${HM.size === 'cap' ? 'on' : ''}">市值</button><button data-v="val" class="${HM.size === 'val' ? 'on' : ''}">成交值</button><button data-v="eq" class="${eq ? 'on' : ''}">平均</button><button data-v="mv" class="${mv ? 'on' : ''}">漲跌</button></div>
-        <div class="seg" id="co"><button data-v="pct" class="${HM.color === 'pct' ? 'on' : ''}">漲跌幅</button><button data-v="f" class="${HM.color === 'f' ? 'on' : ''}">外資</button></div>
+        <div class="seg" id="co"><button data-v="pct" class="${HM.color === 'pct' ? 'on' : ''}">漲跌幅</button>${isTW() ? `<button data-v="f" class="${HM.color === 'f' ? 'on' : ''}">外資</button>` : ''}</div>
         <select id="indSel" class="seg-sel"><option value="">選產業…</option>${inds.map((i) => `<option ${indName === i ? 'selected' : ''}>${esc(i)}</option>`).join('')}</select>
       </div>
       <div class="row small" style="margin-bottom:6px"><b>${esc(title)}</b>${!isAll ? '<button class="chip" data-sc="all" style="padding:1px 8px">‹ 回全市場</button>' : ''}
         <span class="mute" style="margin-left:auto">${items.length} 檔・<span class="up">漲 ${ups}</span>・<span class="down">跌 ${dns}</span>・${HM.color === 'f' ? '' : (eq || mv ? '平均 ' : '加權 ') + fp(wavg)}</span></div>
       ${items.length ? `<div class="hm" id="hm" style="height:${H}px">${html}</div>` : `<div class="card empty">${sc === 'watch' ? '自選股還是空的，先到個股頁按 ☆ 加進來。' : '這裡沒有資料'}</div>`}
       <div class="hm-legend"><span>${HM.color === 'f' ? '外資賣' : '-6%'}</span><i></i><span>${HM.color === 'f' ? '外資買' : '+6%'}</span></div>
-      <p class="disc">方塊大小＝${mv ? '今天漲跌的幅度（漲最多、跌最多的最大）' : eq ? '每檔一樣大' : sizeKey === 'cap' ? '市值' : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${mv ? '漲跌幅度' : sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}${Live.enabled() ? (liveTiles ? '盤中每 5 秒更新漲跌（證交所報價）。' : isAll ? '全市場是收盤資料；自選、概念股、單一產業盤中會即時更新。' : '') : ''}點方塊看重點。</p>
+      <p class="disc">方塊大小＝${mv ? '今天漲跌的幅度（漲最多、跌最多的最大）' : eq ? '每檔一樣大' : sizeKey === 'cap' ? (MK() === 'cn' ? '流通市值' : '市值') : '今天成交值'}，顏色＝${HM.color === 'f' ? '外資今天買賣超金額（估算）' : '今天漲跌幅'}，紅漲綠跌。${isAll ? `全市場只畫${mv ? '漲跌幅度' : sizeKey === 'cap' ? '市值' : '成交值'}前 ${items.length} 檔（共 ${shownAll} 檔），點產業標題可以放大看全部。` : ''}${grp ? '概念股分類是人工整理的代表股，僅供參考。' : ''}${Live.enabled() ? (liveTiles ? '盤中每 5 秒更新漲跌（證交所報價）。' : isAll ? '全市場是收盤資料；自選、概念股、單一產業盤中會即時更新。' : '') : ''}點方塊看重點。</p>
       ${!isAll && items.length ? `<div class="card"><h3>漲跌排行</h3>${listHtml(items.map((x) => x.s).sort((a, b) => b.pct - a.pct))}</div>` : ''}`;
     if (hmTap) { FX.circle($('#hm'), hmTap.x, hmTap.y); hmTap = null; }
     const go = (scope, e) => { HM.scope = scope; hmSave(); if (e) hmTap = { x: e.clientX, y: e.clientY }; FX.haptic(5); V.heat(); window.scrollTo({ top: 0 }); };
@@ -473,8 +566,8 @@
     const kv = (k, v, c = '') => `<div><small>${k}</small><b class="${c}">${v}</b></div>`;
     const el = modal(`<div class="row"><div><h2 style="margin:0">${esc(s.n)} <small class="mute" style="font-size:13px;font-weight:400">${s.c}・${esc(s.ind)}</small></h2></div>
       <div style="margin-left:auto;text-align:right"><div class="num ${cls(s.pct)}" style="font-size:24px;font-weight:700">${s.close}</div><div class="num ${cls(s.pct)} small">${arrow(s.chg)} ${Math.abs(s.chg)}（${fp(s.pct)}）</div></div></div>
-      <div class="kv">${kv('成交值', s.val + ' 億')}${kv('市值', s.cap ? (s.cap >= 10000 ? (s.cap / 10000).toFixed(2) + ' 兆' : s.cap.toLocaleString('en-US') + ' 億') : '—')}${kv('成交量', s.vol.toLocaleString('en-US') + ' 張')}
-        ${kv('外資', fl(s.f), cls(s.f))}${kv('投信', fl(s.t), cls(s.t))}${kv('自營商', fl(s.d), cls(s.d))}</div>
+      <div class="kv">${kv('成交值', valTxt(s.val))}${s.cap || isTW() ? kv(MK() === 'cn' ? '流通市值' : '市值', capTxt(s.cap)) : ''}${kv('成交量', volTxt(s))}
+        ${isTW() ? `${kv('外資', fl(s.f), cls(s.f))}${kv('投信', fl(s.t), cls(s.t))}${kv('自營商', fl(s.d), cls(s.d))}` : ''}</div>
       ${X.items[s.c] ? '<p class="small" style="margin-top:10px;color:var(--acc)">🤖 這檔今天有準備好的白話解說</p>' : ''}
       <div class="grid2" style="margin-top:14px"><button class="btn" data-a="w">${on ? '⭐ 已在自選' : '☆ 加自選'}</button><a class="btn pri" href="#s/${s.c}" data-a="go">看個股 ›</a></div>`);
     el.addEventListener('click', (e) => {
@@ -493,7 +586,7 @@
       <div class="wk-bars">${WK.groups.map((g) => { const w = Math.min(100, Math.abs(g.pct5) * 8); return `<div class="wk-b"><span>${esc(g.name)}</span><div class="ib-t"><i class="${cls(g.pct5)}" style="${g.pct5 >= 0 ? 'left:50%' : 'right:50%'};width:${w / 2}%"></i></div><b class="num ${cls(g.pct5)}">${fp(g.pct5, 1)}</b></div>`; }).join('')}</div>
       <p class="small sub" style="margin-top:8px">${esc(WK.summary)}</p></div>`;
     if (!Core.isUnlocked(S, key, 'weekly', M.date)) {
-      $('#view').innerHTML = head + `<div class="card">${lockBox({ c: key }, 'weekly', '每個族群這週為什麼強、為什麼弱？誰帶頭、誰拖累？AI 讀完成員股票的漲跌和解說，一個族群一段話寫給你看…')}</div>${disclaimer}`;
+      $('#view').innerHTML = head + `<div class="card">${lockBox({ c: key }, 'weekly', '每個族群這週為什麼強、為什麼弱？誰帶頭、誰拖累？AI 讀完成員股票的漲跌和解說，一個族群一段話寫給你看…')}</div>${disclaimer()}`;
       $('#view').querySelector('[data-unlock]').onclick = (e) => tryUnlock(key, 'weekly', () => V.weekly(), e.currentTarget);
       return;
     }
@@ -508,8 +601,8 @@
     top();
     if (!M) return ($('#view').innerHTML = spin);
     const arr = S.watch.map((c) => byCode.get(c)).filter(Boolean);
-    $('#view').innerHTML = `<div class="card"><h3>⭐ 我的自選<small>${arr.length} 檔</small></h3>${arr.length ? listHtml(arr) : '<p class="empty">還沒有自選股。打開任何一檔股票，按右上角的 ☆ 加進來。</p>'}</div>
-      <p class="disc">在個股頁按 ⭐ 可以移出自選。</p>`;
+    $('#view').innerHTML = `<div class="card"><h3>⭐ 我的自選・${GM().flag} ${GM().name}<small>${arr.length} 檔</small></h3>${arr.length ? listHtml(arr) : '<p class="empty">還沒有自選股。打開任何一檔股票，按右上角的 ☆ 加進來。</p>'}</div>
+      <p class="disc">在個股頁按 ⭐ 可以移出自選。${(() => { const o = Core.MKT_IDS.filter((id) => id !== MK() && DB[id]?.M && S.watch.some((c) => DB[id].byCode.has(c))).map((id) => Core.MARKETS[id].name); return o.length ? `其他市場（${o.join('、')}）的自選股，按上面的 ${GM().flag} 切換市場就看得到。` : ''; })()}</p>`;
   };
 
   // 盲測：遮住股票名稱和日期，猜之後 20 個交易日會漲還是跌
@@ -519,10 +612,13 @@
     if (!Core.gameUse(S)) return V.game();
     save();
     G.phase = 'loading'; V.game();
-    const pool = stocksOnly().sort((a, b) => b.val - a.val).slice(0, 150);
+    // 題目只出台股（FinMind 有台股多年的歷史）；在美股、陸股時也一樣
+    await loadMarket('tw'); const TW = DB.tw;
+    if (!TW?.M) { G.phase = 'idle'; G.err = '台股資料載入失敗，等一下再試'; S.gameToday = Math.max(0, S.gameToday - 1); save(); return V.game(); }
+    const pool = [...TW.byCode.values()].filter((x) => twStock(x.c)).sort((a, b) => b.val - a.val).slice(0, 150);
     for (let tries = 0; tries < 4; tries++) {
       const s = pool[Math.floor(Math.random() * pool.length)];
-      const t0 = Date.parse('2018-01-01'), t1 = Date.parse(M.date) - 420 * 864e5;
+      const t0 = Date.parse('2018-01-01'), t1 = Date.parse(TW.M.date) - 420 * 864e5;
       const start = new Date(t0 + Math.random() * (t1 - t0)).toISOString().slice(0, 10);
       try {
         const rows = await fm('TaiwanStockPrice', { data_id: s.c, start_date: start, end_date: addDays(start, 150) });
@@ -545,7 +641,7 @@
     if (G.phase === 'loading') body = `<div class="card">${spin}<p class="small mute" style="text-align:center">從歷史裡挑一段真實走勢…</p></div>`;
     else if (G.phase === 'ask') {
       body = `<div class="card"><h3>🎯 神秘股票<small>${esc(G.s.ind)}・時間保密</small></h3>${chart(G.rows.slice(0, SHOW), { hide: true })}
-        <p style="margin-top:8px">這是某檔台股真實的 ${SHOW} 個交易日走勢。<b>接下來 ${AHEAD} 個交易日</b>會漲還是跌？漲跌多少？</p>
+        <p style="margin-top:8px">這是某檔<b>台股</b>真實的 ${SHOW} 個交易日走勢。<b>接下來 ${AHEAD} 個交易日</b>會漲還是跌？漲跌多少？</p>
         <div class="guess"><div class="gv num" id="gv">0%</div><small class="mute">左右拖動尺規選擇・方向猜對就算對，差 ${Core.ECON.GAME_SHARP}% 以內是「神準」+${Core.ECON.GAME_SHARP_BONUS} 點</small></div>
         <div id="rl"></div>
         <button class="btn pri block" id="gok" disabled style="margin-top:12px">拖動尺規選擇漲跌幅</button></div>`;
@@ -557,8 +653,8 @@
         <p>你猜 <b class="num ${cls(G.guess)}">${fp(G.guess, 0)}</b>，實際 ${AHEAD} 個交易日 <b class="num ${cls(r)}">${fp(r, 1)}</b>（${a} → ${b} 元）</p></div>
         ${chart(G.rows, { split: SHOW - 1 })}
         <p class="disc">股價短期走勢很難猜，答對率能長期贏過 50% 已經不容易。想知道現在的情況，可以看「AI 個股報告書」。</p>
-        <a class="btn block" href="#s/${G.s.c}" style="margin-top:8px">看 ${esc(G.s.n)} 現在的資料</a></div>`;
-    } else body = `<div class="card"><h3>🎯 歷史盲測</h3><p class="sub">從台股過去的真實走勢隨機挑一段，把股票名稱和日期遮起來，讓你猜之後會漲還是跌，答完才揭曉。用來測試自己看圖的直覺準不準。</p>${G.err ? `<p class="small" style="color:var(--gold);margin-top:6px">${esc(G.err)}</p>` : ''}</div>`;
+        <a class="btn block" href="#s/${G.s.c}" data-tw="1" style="margin-top:8px">看 ${esc(G.s.n)} 現在的資料</a></div>`;
+    } else body = `<div class="card"><h3>🎯 歷史盲測${isTW() ? '' : '<small>題目是台股</small>'}</h3><p class="sub">從台股過去的真實走勢隨機挑一段，把股票名稱和日期遮起來，讓你猜之後會漲還是跌，答完才揭曉。用來測試自己看圖的直覺準不準。</p>${G.err ? `<p class="small" style="color:var(--gold);margin-top:6px">${esc(G.err)}</p>` : ''}</div>`;
     $('#view').innerHTML = body + (G.phase === 'ask' || G.phase === 'loading' ? '' : moreBtn) + `<div style="height:12px"></div>` + stats;
     G.err = '';
     const go = $('#go'); if (go) go.onclick = newRound;
@@ -613,7 +709,7 @@
       ${DEV ? `<div class="card"><h3>🛠 開發者</h3><p class="small mute">假廣告模式</p><select id="am" class="btn block" style="margin:6px 0">${Object.entries(Ads.MODES).map(([k, v]) => `<option value="${k}" ${Ads.mode() === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <div class="grid2"><button class="btn" id="p50">+50 點</button><button class="btn" id="rst">清除所有資料</button></div>
         <p class="small mute" style="margin-top:8px">廣告看完 ${S.stats.adsDone}・中途關掉 ${S.stats.adsSkip}・沒廣告 ${S.stats.adsNofill}・插頁 ${S.stats.inter}・花掉 ${S.stats.spent} 點・查詢 ${S.opens} 次</p></div>` : ''}
-      <div class="card"><h3>關於</h3><p class="small sub">股市白話通用白話告訴你股票今天為什麼漲跌。資料每個交易日收盤後更新${M ? `，目前是 ${M.date} 的資料` : ''}。</p>${disclaimer}</div>`;
+      <div class="card"><h3>關於</h3><p class="small sub">股市白話通用白話告訴你股票今天為什麼漲跌。資料每個交易日收盤後更新${M ? `，目前是 ${M.date} 的資料` : ''}。</p>${disclaimer()}</div>`;
     FX.count($('#wp'), S.pts, { dur: 800 }); walletShown = S.pts;
     $('#ad').onclick = async (e) => { await watchAd(e.currentTarget); V.me(); };
     $('#ci').onclick = () => { const r = Core.checkin(S); save(); if (r.ok) { bump(); toast(`+${r.got} 點`); } V.me(); };
