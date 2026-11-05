@@ -355,9 +355,10 @@ body{background:radial-gradient(90% 260px at 50% -40px,var(--glow),transparent 7
   <a href="#me" data-r="me"><b>🪙</b>點數</a>
 </div></nav>
 <script>
-  // 資料放哪：網頁版跟 App 同一個網站就用 ./data/；包成 iPhone App 後改抓網站上的檔案
+  // 資料放哪：網頁版跟 App 同一個網站就用 ./data/；包成 iPhone App 後改抓 Cloudflare Pages（免費、可商用）
+  // （1.1 版抓的是 weo001.github.io/gushi，那邊的資料先繼續更新，等 1.1 不用了再停）
   window.CFG = {
-    DATA: (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ? 'https://weo001.github.io/gushi/data/' : './data/',
+    DATA: (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ? 'https://gushi-575.pages.dev/data/' : './data/',
   };
 </script>
 <script src="core.js"></script>

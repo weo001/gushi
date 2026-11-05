@@ -218,17 +218,24 @@ t('網頁（非本機、非 App）不抓', !L.enabled());
 }
 
 (async () => {
-  // ── 深度報告：台積電真實資料 ──
-  try {
-    const fm = async (ds, start) => { const j = await (await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=${ds}&data_id=2330&start_date=${start}`)).json(); return j.data || []; };
-    const [prices, inst, margin, rev, per] = await Promise.all([fm('TaiwanStockPrice', '2023-11-01'), fm('TaiwanStockInstitutionalInvestorsBuySell', '2026-09-20'), fm('TaiwanStockMarginPurchaseShortSale', '2026-09-20'), fm('TaiwanStockMonthRevenue', '2025-06-01'), fm('TaiwanStockPER', '2025-11-01')]);
-    const R = C.analyze({ prices, inst, margin, rev, per });
-    t('真實資料：6 段以上', R.sections.length >= 6);
-    t('真實資料：數字沒有 NaN', !JSON.stringify(R).includes('NaN'));
-    console.log('\n── 台積電深度報告 ──\n' + R.summary);
-    for (const x of R.sections) console.log(x.icon, x.title, '\n  ' + x.lines.join('\n  '));
-    console.log('😈', R.risks.join(' / '));
-  } catch (e) { console.log('（沒網路，跳過真實資料測試）', e.message); }
+  // ── 開放資料（2026-11-05 起）：不再連 FinMind；檢查資料檔和授權標示 ──
+  {
+    const _fs = require('fs'), _p = require('path'), R = (f) => _fs.readFileSync(_p.join(__dirname, f), 'utf8');
+    const A = R('app.js'), B = R('pipeline/build.js'), RP = R('pipeline/reports.js');
+    t('App 不再直接連 FinMind', !/finmindtrade/i.test(A) && !/\bfm\(/.test(A));
+    t('每日資料程式不再用 FinMind、證交所網站版', !/finmindtrade|www\.twse\.com\.tw\/rwd/i.test(B + RP) && /openapi\.twse\.com\.tw/.test(B) && /tpex\.org\.tw\/openapi/.test(B));
+    t('App 有標示政府資料開放授權條款', /data\.gov\.tw\/license/.test(A) && /data\.gov\.tw\/license/.test(R('privacy.html')));
+    const m = JSON.parse(R('data/market.json')), ch = JSON.parse(R('data/chart.json'));
+    t('台股 market.json 是開放資料版、欄位跟舊版一樣', m.src === 'open' && m.cols.join() === 'c,n,m,ind,close,chg,pct,vol,val,f,t,d,cap' && m.rows.length > 1000);
+    t('上市股票沒有三大法人（付費資料）', m.rows.filter((r) => r[2] === 'L').every((r) => r[9] == null));
+    t('台股 chart.json 每檔都有、長度跟日期一樣', m.rows.every((r) => ch.c[r[0]] && ch.c[r[0]].length === ch.dates.length));
+    // 歷史很短時的報告書
+    const Rs = C.analyze({ prices: [{ date: '2026-11-04', close: 100, Trading_Volume: 1e6 }, { date: '2026-11-05', close: 102, Trading_Volume: 1e6 }], revOpen: { '2026-09': [5e8, 12.3, -1, 8.8] }, per: [{ date: '2026-11-05', PER: 20, PBR: 3, dividend_yield: 2 }], allowShort: true });
+    t('歷史很短也能做報告書（營收、評價）', !Rs.error && Rs.sections.some((x) => x.title === '月營收') && Rs.sections.some((x) => x.title.includes('評價')) && !JSON.stringify(Rs).includes('NaN') && !/undefined/.test(JSON.stringify(Rs)));
+    t('沒有 allowShort 時照舊要 30 天', !!C.analyze({ prices: [{ date: 'd', close: 1 }] }).error);
+    const pr = C.aiPrompt({ code: '2330', name: '台積電', close: 1, pct: 1, f: null, noInst: true, news: [{ title: 'x', src: '公開資訊觀測站重大訊息' }] });
+    t('上市股票的 AI 提示詞：不給法人、寫重大訊息', /不要提到法人/.test(pr.user) && /重大訊息/.test(pr.user));
+  }
   console.log(`\n${ok} 項通過，${bad} 項失敗`);
   process.exit(bad ? 1 : 0);
 })();

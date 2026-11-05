@@ -13,3 +13,10 @@ ios/App/output/
 # 美股、陸股資料：授權未確認，不公開（只在本機個人使用）
 data/us/
 data/cn/
+site/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

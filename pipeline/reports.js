@@ -1,6 +1,7 @@
 // 盤後 AI 報告（build.js 最後呼叫）：
 //   data/daily.json   AI 盤後日報（每天 1 篇，免費看）
-//   data/reports.json AI 個股報告書（成交值前 100 檔，FinMind 額度內輪流更新；每篇有規則版分析＋AI 結論）
+//   data/reports.json AI 個股報告書（成交值前 100 檔；每篇有規則版分析＋AI 結論）
+//   2026-11-05 起資料全部來自 build.js 每天存的開放資料（store/tw/），不再用 FinMind
 //   data/hist.json    概念股成員的收盤價（最近 12 個交易日），算週漲跌用
 //   data/weekly.json  概念股 AI 週報（每週五產生；12 個族群各一段＋總覽）
 const fs = require('fs'), path = require('path');
@@ -27,7 +28,7 @@ async function daily({ date, market, stocks, explain, groq, log }) {
   const news = [...new Set(Object.values(ex).flatMap((x) => (x.news || []).slice(0, 2).map((n) => n.title)))].slice(0, 10);
   const f = {
     date, taiex: ix[0] ? `${ix[0].close}（${fp(ix[0].pct)}）` : '無資料', otc: ix[1] ? `${ix[1].close}（${fp(ix[1].pct)}）` : '',
-    up: market.breadth.up, down: market.breadth.down, flat: market.breadth.flat, inst: market.inst,
+    up: market.breadth.up, down: market.breadth.down, flat: market.breadth.flat, inst: market.inst, instLabel: market.instScope === 'otc' ? '上櫃三大法人買賣超（億元；上市的沒有開放資料）' : '',
     strong: market.sectors.slice(0, 4).map((x) => `${x.ind}${fp(x.pct)}`).join('、'), weak: market.sectors.slice(-3).reverse().map((x) => `${x.ind}${fp(x.pct)}`).join('、'),
     hot: hot.map((s) => `${s.n}${fp(s.pct)}`).join('、'), notes, news,
   };
@@ -35,7 +36,7 @@ async function daily({ date, market, stocks, explain, groq, log }) {
   const w = (v) => (v >= 0 ? '買超' : '賣超');
   const rule = {
     title: ix[0] ? `加權指數${ix[0].pct >= 0 ? '上漲' : '下跌'} ${Math.abs(ix[0].pct)}%` : '今日台股',
-    text: `加權指數收 ${f.taiex}，上漲 ${f.up} 家、下跌 ${f.down} 家。三大法人中，外資${w(f.inst.f)}約 ${Math.abs(Math.round(f.inst.f))} 億、投信${w(f.inst.t)}約 ${Math.abs(Math.round(f.inst.t))} 億。強勢族群是${f.strong}；弱勢族群是${f.weak}。成交值最大的是${f.hot}。`,
+    text: `加權指數收 ${f.taiex}，上漲 ${f.up} 家、下跌 ${f.down} 家。${f.instLabel ? '上櫃' : ''}三大法人中，外資${w(f.inst.f)}約 ${Math.abs(Math.round(f.inst.f))} 億、投信${w(f.inst.t)}約 ${Math.abs(Math.round(f.inst.t))} 億。強勢族群是${f.strong}；弱勢族群是${f.weak}。成交值最大的是${f.hot}。`,
   };
   let out = null;
   if (groq) { const t = await groq(Core.dailyPrompt(f), 900); out = Core.parseDaily(t); if (!out && t) log('  日報 AI 不合格：', t.slice(0, 80)); }
@@ -44,70 +45,40 @@ async function daily({ date, market, stocks, explain, groq, log }) {
 }
 
 // ── 2. 個股報告書 ──
-async function stockReports({ date, stocks, fm, groq, log, budget }) {
+async function stockReports({ date, stocks, series, extra, groq, log }) {
   const old = read('reports.json', { items: {} });
   const items = {};
-  // 舊的報告保留 10 天（還沒輪到更新的股票先給舊的，畫面會寫報告日期）
-  for (const [c, x] of Object.entries(old.items || {})) if (x.d >= addDays(date, -10)) items[c] = x;
+  // 舊的報告保留 10 天；舊版（FinMind 時期）的報告不留
+  for (const [c, x] of Object.entries(old.items || {})) if (x.d >= addDays(date, -10) && x.src === 'open') items[c] = x;
   const top = stocks.filter((s) => /^[1-9]\d{3}$/.test(s.c)).sort((a, b) => b.val - a.val).slice(0, 100);
-  // 今天還沒做的排前面；同樣沒做的，越久沒更新越前面，再照成交值
-  const todo = top.filter((s) => items[s.c]?.d !== date).sort((a, b) => (items[a.c]?.d || '') .localeCompare(items[b.c]?.d || '') || b.val - a.val);
-  let calls = 0, made = 0, aiN = 0;
+  const todo = top.filter((s) => items[s.c]?.d !== date || !items[s.c]?.ai).sort((a, b) => (items[a.c]?.d || '').localeCompare(items[b.c]?.d || '') || b.val - a.val);
+  let made = 0, aiN = 0;
+  const AI_MAX = 40; // Groq 每天額度有限：AI 結論每天最多 40 篇（輪流）
   for (const s of todo) {
-    if (calls + 5 > budget) break;
-    try {
-      const q = (start) => ({ data_id: s.c, start_date: start });
-      calls += 5;
-      const [prices, inst, margin, rev, per] = await Promise.all([
-        fm('TaiwanStockPrice', q(addDays(date, -3 * 365))), fm('TaiwanStockInstitutionalInvestorsBuySell', q(addDays(date, -45))).catch(() => []),
-        fm('TaiwanStockMarginPurchaseShortSale', q(addDays(date, -45))).catch(() => []), fm('TaiwanStockMonthRevenue', q(addDays(date, -500))).catch(() => []),
-        fm('TaiwanStockPER', q(addDays(date, -365))).catch(() => []),
-      ]);
-      const R = Core.analyze({ prices, inst, margin, rev, per });
-      if (R.error) { log('  報告書略過', s.c, R.error); continue; }
-      let ai = null;
-      if (groq) { const t = Core.aiClean(await groq(Core.reportPrompt(s.n, s.c, R), 900)); if (Core.aiOk(t, 360, 60)) ai = t; else if (t) log('  報告書 AI 不合格', s.c, t.slice(0, 50)); }
-      const { similar, ...keep } = R; // similar 的細節 App 用不到
-      items[s.c] = { d: date, ai, R: keep };
-      made++; if (ai) aiN++;
-      log(`報告書 ${made} ${s.c} ${s.n} ${ai ? 'AI' : '規則'}（FinMind ${calls}/${budget}）`);
-    } catch (e) {
-      log('  報告書失敗', s.c, e.message);
-      if (/limit|upper|402|次數/i.test(e.message)) { log('  FinMind 額度用完，下次再補'); break; }
-    }
-    await sleep(800);
+    if (items[s.c]?.d === date && !(groq && aiN < AI_MAX)) continue;
+    const R = Core.analyze({ prices: series(s.c), ...extra(s.c), allowShort: true });
+    if (R.error) { log('  報告書略過', s.c, R.error); continue; }
+    let ai = null;
+    if (groq && aiN < AI_MAX) { const t = Core.aiClean(await groq(Core.reportPrompt(s.n, s.c, R), 900)); if (Core.aiOk(t, 360, 60)) { ai = t; aiN++; } else if (t) log('  報告書 AI 不合格', s.c, t.slice(0, 50)); }
+    if (!ai && items[s.c]?.ai && items[s.c].d >= addDays(date, -3)) continue;
+    const { similar, ...keep } = R; // similar 的細節 App 用不到
+    items[s.c] = { d: date, ai, R: keep, src: 'open' };
+    made++;
+    if (ai) log(`報告書 ${made} ${s.c} ${s.n} AI`);
   }
-  write('reports.json', { date, items });
+  write('reports.json', { date, src: 'open', items });
   log(`個股報告書：今天新做 ${made} 篇（AI ${aiN}），共 ${Object.keys(items).length} 篇`);
-  return calls;
 }
 
 // ── 3. 概念股：每天記收盤價 → 每週五寫週報 ──
-async function weekly({ date, all, explain, groq, log, fm, budget }) {
+async function weekly({ date, all, explain, groq, log, hist: H }) {
   const codes = [...new Set(Core.GROUPS.flatMap((g) => g.codes))];
-  const hist = read('hist.json', { dates: [], c: {} });
-  let calls = 0;
-  // 第一次（或中斷太久）：用 FinMind 補最近 12 個交易日
-  if (hist.dates.length < 6 || hist.dates[hist.dates.length - 1] < addDays(date, -10)) {
-    log('概念股歷史收盤：從 FinMind 補');
-    const dates = new Set(), c = {};
-    for (const code of codes) {
-      if (calls + 1 > budget) break;
-      calls++;
-      try { const rows = await fm('TaiwanStockPrice', { data_id: code, start_date: addDays(date, -24), end_date: date }); c[code] = Object.fromEntries(rows.map((r) => [r.date, r.close])); rows.forEach((r) => dates.add(r.date)); } catch (e) { log('  補收盤失敗', code, e.message); }
-      await sleep(300);
-    }
-    hist.dates = [...dates].sort().slice(-12);
-    hist.c = Object.fromEntries(Object.entries(c).map(([k, m]) => [k, hist.dates.map((d) => m[d] ?? null)]));
-  }
-  if (!hist.dates.includes(date)) {
-    hist.dates.push(date);
-    for (const code of codes) (hist.c[code] ||= Array(hist.dates.length - 1).fill(null)).push(all[code]?.close ?? null);
-    while (hist.dates.length > 12) { hist.dates.shift(); for (const k in hist.c) hist.c[k].shift(); }
-  } else {
-    const i = hist.dates.indexOf(date); for (const code of codes) if (all[code]) (hist.c[code] ||= Array(hist.dates.length).fill(null))[i] = all[code].close;
-  }
+  const calls = 0;
+  // 概念股成員最近 12 個交易日的收盤：從 build.js 每天存的開放資料拿
+  const last = H.slice(-12), hist = { dates: last.map(([d]) => d), c: {} };
+  for (const code of codes) hist.c[code] = last.map(([, x]) => (x.L?.[code] || x.O?.[code])?.[1] ?? null);
   write('hist.json', hist);
+  if (hist.dates.length < 6) { log(`概念股週報：歷史只有 ${hist.dates.length} 天，累積到 6 天以上才寫`); return calls; }
 
   // 週報：資料日是星期五，或週報超過 8 天沒更新
   const wk = Core.weekKey(date), old = read('weekly.json', {});

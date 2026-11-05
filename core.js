@@ -196,7 +196,7 @@
 
     // 新聞
     const news = (x.news || []).slice(0, 2);
-    if (news.length) out.push(`相關新聞：${news.map((n) => { const t = String(n.title).replace(/\s*-\s*[^-]{2,15}$/, ''); return '「' + (t.length > 34 ? t.slice(0, 33) + '…' : t) + '」'; }).join('、')}。`);
+    if (news.length) out.push(`${news[0].src === '公開資訊觀測站重大訊息' ? '公司重大訊息' : '相關新聞'}：${news.map((n) => { const t = String(n.title).replace(/\s*-\s*[^-]{2,15}$/, ''); return '「' + (t.length > 34 ? t.slice(0, 33) + '…' : t) + '」'; }).join('、')}。`);
     else if (out.length <= 2) out.push('從公開資料看不出明確原因，可能是一般的買賣波動。');
 
     return { text: out.join(''), tags };
@@ -210,8 +210,9 @@
       `今日收盤：${x.close} 元，漲跌 ${C.fmtPct(x.pct)}`,
       `大盤：${C.fmtPct(x.mktPct)}；同產業 ${x.indN || 0} 檔平均：${C.fmtPct(x.indPct)}`,
       `成交量是近 20 日平均的 ${isFinite(x.volRatio) ? r1(x.volRatio) : '未知'} 倍`,
-      `三大法人今日買賣超（張）：外資 ${Math.round(x.f || 0)}、投信 ${Math.round(x.t || 0)}、自營商 ${Math.round(x.d || 0)}`,
-      `今天的新聞標題：` + ((x.news || []).slice(0, 8).map((n, i) => `\n${i + 1}. ${n.title}`).join('') || '無'),
+      // 上市股票的三大法人是證交所付費資料、沒有開放 → 不給，也叫 AI 不要提
+      x.noInst || x.f == null ? '三大法人：無資料（不要提到法人）' : `三大法人今日買賣超（張）：外資 ${Math.round(x.f || 0)}、投信 ${Math.round(x.t || 0)}、自營商 ${Math.round(x.d || 0)}`,
+      `今天的公司重大訊息${x.news?.[0]?.src === '公開資訊觀測站重大訊息' ? '（公開資訊觀測站）' : '／新聞標題'}：` + ((x.news || []).slice(0, 8).map((n, i) => `\n${i + 1}. ${n.title}`).join('') || '無'),
     ];
     return {
       system: '你是台股解說員，對象是投資新手。只能根據使用者提供的資料解釋這檔股票今天為什麼漲跌，資料裡沒有的事情不准猜、不准編造新聞或數字。只有在資料完全看不出原因時，才說「從公開資料看不出明確原因」；已經說明原因的話就不要再加這句。數字照資料寫，不要自己換算或加上資料沒有的點位。不可以給任何買進、賣出、目標價或預測建議。用繁體中文（台灣用語），寫 2 到 4 句，總共 150 字以內（一定要短），不要用條列、不要用 markdown。',
@@ -250,7 +251,7 @@
   C.dailyPrompt = (f) => ({
     system: '你是台股盤後日報的編輯，幫新手寫今天台股發生了什麼事。第一行寫「標題：」加 18 字以內的標題，下一行開始寫內文 4 到 6 句、300 字以內，依序講大盤和漲跌家數、三大法人、強勢和弱勢族群、焦點個股和原因（原因只能用資料裡的個股解說和新聞）。' + RULES,
     user: [`日期：${f.date}`, `加權指數 ${f.taiex}；櫃買指數 ${f.otc || '無資料'}`, `上漲 ${f.up} 家、下跌 ${f.down} 家、平盤 ${f.flat} 家`,
-      `三大法人買賣超（估算，億元）：外資 ${f.inst.f}、投信 ${f.inst.t}、自營商 ${f.inst.d}`, `強勢族群：${f.strong}`, `弱勢族群：${f.weak}`,
+      `${f.instLabel || '三大法人買賣超（估算，億元）'}：外資 ${f.inst.f}、投信 ${f.inst.t}、自營商 ${f.inst.d}`, `強勢族群：${f.strong}`, `弱勢族群：${f.weak}`,
       `成交值最大：${f.hot}`, `焦點個股解說：` + f.notes.map((x, i) => `\n${i + 1}. ${x}`).join(''), `新聞標題：` + f.news.map((x, i) => `\n${i + 1}. ${x}`).join('')].join('\n'),
   });
   C.parseDaily = (t) => {
@@ -290,7 +291,9 @@
   C.analyze = (raw) => {
     const P = (raw.prices || []).filter((r) => r.close > 0);
     const cur = raw.cur || '元', vfmt = raw.volFmt || ((v) => C.fmtLots(v / 1000)); // 台股用「張」，陸股、美股用「股」
-    if (P.length < 30) return { error: '歷史資料不足（上市未滿 30 個交易日）' };
+    // allowShort：台股改用自己累積的開放資料後，前幾週歷史很短 → 股價那幾段先跳過，其他（營收、評價、籌碼）照做
+    if (P.length < 30 && !(raw.allowShort && P.length >= 1)) return { error: '歷史資料不足（上市未滿 30 個交易日）' };
+    if (P.length < 30) return C.analyzeShort(raw, P);
     const close = P.map((r) => r.close), n = close.length, last = P[n - 1], c = last.close;
     const sections = [], risks = [];
     let bull = 0, bear = 0;
@@ -378,6 +381,9 @@
       sections.push({ icon: '💰', title: '月營收', lines: LL, tone: good >= 2 ? 1 : good === 0 ? -1 : 0 });
     }
 
+    // 月營收（開放資料版，沒有 FinMind 的 rev 時用）
+    if (!(rv.length >= 13) && raw.revOpen) { const ro = C.revOpenSection(raw.revOpen); if (ro) { sections.push(ro.section); sig(ro.sig); if (ro.risk) risks.push(ro.risk); } }
+
     // 本益比
     const pe = (raw.per || []).filter((r) => r.PER > 0);
     if (pe.length >= 20) {
@@ -405,6 +411,50 @@
     return { date: last.date, close: c, summary, bull, bear, sections, risks, similar };
   };
 
+  // 月營收（開放資料版）：{ 'YYYY-MM': [營收(千元), 年增%, 月增%, 累計年增%] }
+  C.revOpenSection = (rv) => {
+    const ks = Object.keys(rv || {}).sort(); if (!ks.length) return null;
+    const k = ks[ks.length - 1], [rev, yoy, mom, cum] = rv[k];
+    const last3 = ks.slice(-3).map((x) => rv[x][1]).filter(Number.isFinite);
+    const L = [`最新月營收（${k.slice(0, 4)} 年 ${+k.slice(5)} 月）${r1(rev / 1e5).toLocaleString('en-US')} 億元，比去年同月 ${C.fmtPct(yoy, 1)}、比上個月 ${C.fmtPct(mom, 1)}。`,
+      `今年累計營收比去年同期 ${C.fmtPct(cum, 1)}。`];
+    if (last3.length >= 2) L.push(`近 ${last3.length} 個月年增率：${last3.map((x) => C.fmtPct(x, 1)).join('、')}。`);
+    const sig = yoy > 0 && cum > 0 ? 1 : yoy < 0 && cum < 0 ? -1 : 0;
+    return { sig, risk: last3.length >= 3 && last3.every((x) => x < 0) ? '月營收已經連續 3 個月比去年衰退。' : yoy < 0 && cum < 0 ? '月營收和今年累計營收都比去年少。' : null,
+      section: { icon: '💰', title: '月營收', lines: L, tone: sig } };
+  };
+  // 歷史很短時的報告（台股開放資料剛開始累積的前幾週）
+  C.analyzeShort = (raw, P) => {
+    const sections = [], risks = [];
+    let bull = 0, bear = 0;
+    const sig = (b) => { if (b > 0) bull++; else if (b < 0) bear++; };
+    const n = P.length, last = P[n - 1], c = last.close;
+    const L = [`股價走勢的歷史還在累積：目前只有 ${n} 個交易日（${P[0].date} 起），月線、季線、歷史相似情境要累積更多天才能算。`];
+    if (n >= 5) L.push(`這 ${n} 個交易日 ${C.fmtPct(pct(c, P[0].close), 1)}，期間最高 ${px(Math.max(...P.map((r) => r.max || r.close)))}、最低 ${px(Math.min(...P.map((r) => r.min || r.close)))} 元。`);
+    sections.push({ icon: '📈', title: '股價位置', lines: L, tone: 0 });
+    // 上櫃三大法人
+    const inst = raw.inst || [];
+    if (inst.length) {
+      const byDay = {};
+      for (const r of inst) { const d = (byDay[r.date] ||= { f: 0, t: 0 }); const v = ((r.buy || 0) - (r.sell || 0)) / 1000; if (r.name === 'Foreign_Investor') d.f += v; else if (r.name === 'Investment_Trust') d.t += v; }
+      const D = Object.keys(byDay).sort().map((k) => byDay[k]), f = D.reduce((a, b) => a + b.f, 0), t = D.reduce((a, b) => a + b.t, 0);
+      sections.push({ icon: '🏦', title: '法人籌碼', tone: Math.sign(f + t), lines: [`近 ${D.length} 個交易日外資${f >= 0 ? '買超' : '賣超'} ${C.fmtLots(f)}、投信${t >= 0 ? '買超' : '賣超'} ${C.fmtLots(t)}。`] });
+      if (D.length >= 3) sig(Math.sign(f + t));
+    }
+    const mg = (raw.margin || []).filter((r) => r.MarginPurchaseTodayBalance != null);
+    if (mg.length) {
+      const a = mg[0].MarginPurchaseTodayBalance, b = mg[mg.length - 1].MarginPurchaseTodayBalance, ch = pct(b, a);
+      sections.push({ icon: '💳', title: '融資（散戶借錢買）', tone: 0, lines: [`融資餘額 ${C.fmtLots(b)}${mg.length >= 2 && Number.isFinite(ch) ? `，${mg.length} 天來${ch >= 0 ? '增加' : '減少'} ${Math.abs(r1(ch))}%` : ''}。`] });
+    }
+    const ro = C.revOpenSection(raw.revOpen);
+    if (ro) { sections.push(ro.section); sig(ro.sig); if (ro.risk) risks.push(ro.risk); }
+    const pe = (raw.per || []).filter((r) => r.PER > 0), now = pe[pe.length - 1];
+    if (now) sections.push({ icon: '🏷️', title: '評價（貴不貴）', tone: 0, lines: [`本益比 ${now.PER} 倍${now.PBR ? `、股價淨值比 ${now.PBR} 倍` : ''}${now.dividend_yield ? `、殖利率 ${now.dividend_yield}%` : ''}。`, '本益比跟自己過去比貴不貴，要累積更多天才能算。'] });
+    if (!risks.length) risks.push('目前資料裡沒有看到特別明顯的警訊，但這不代表沒有風險；而且歷史資料還很短，判斷要保守。');
+    const summary = bull > bear + 1 ? `資料面偏多：${bull} 個偏多訊號、${bear} 個偏空訊號。` : bear > bull + 1 ? `資料面偏弱：${bear} 個偏空訊號、${bull} 個偏多訊號。` : `資料面多空差不多：偏多 ${bull} 個、偏空 ${bear} 個。`;
+    return { date: last.date, close: c, summary, bull, bear, sections, risks, similar: null, short: n };
+  };
+
   // 找歷史上和現在最像的時候，看之後 h 天的漲跌
   C.similar = (P, h = 10, k = 20) => {
     const close = P.map((r) => r.close), n = close.length;
@@ -429,7 +479,7 @@
   // ───────────── 4b. 多市場：台股、美股、陸股 ─────────────
   // 三個市場都是「盤後」：收盤後伺服器統一抓資料、寫 AI 報告；App 上寫清楚各市場幾點收盤（換成台灣時間）
   C.MARKETS = {
-    tw: { id: 'tw', name: '台股', flag: '🇹🇼', cur: '元', idxName: '加權指數', limit: 10, src: '臺灣證券交易所、證券櫃檯買賣中心、FinMind' },
+    tw: { id: 'tw', name: '台股', flag: '🇹🇼', cur: '元', idxName: '加權指數', limit: 10, src: '臺灣證券交易所、證券櫃檯買賣中心（依政府資料開放授權條款釋出）' },
     us: { id: 'us', name: '美股', flag: '🇺🇸', cur: '美元', idxName: 'S&P 500', limit: Infinity, newsEn: true, valUnit: '億美元', capUnit: '億美元', src: 'Massive（Polygon.io）' },
     cn: { id: 'cn', name: '陸股', flag: '🇨🇳', cur: '人民幣', idxName: '上證指數', limit: 10, valUnit: '億人民幣', capUnit: '億人民幣', src: 'BaoStock（證券寶）' },
   };
